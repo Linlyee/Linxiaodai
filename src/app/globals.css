@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-primary: #FF6A3D;
+  --color-primary-dark: #E55A2F;
+  --color-primary-light: #FF8C6B;
+  --color-bg: #FFF8F3;
+  --color-bg-white: #FFFFFF;
+  --color-text: #2D2D2D;
+  --color-text-secondary: #6B7280;
+  --color-border: #F0E4DA;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D1C5B8;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B8A898;
+}
+
+/* Chat message markdown-like styling */
+.chat-message p {
+  margin: 0.5em 0;
+}
+.chat-message p:first-child {
+  margin-top: 0;
+}
+.chat-message p:last-child {
+  margin-bottom: 0;
+}
+.chat-message strong {
+  color: var(--color-primary);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.animate-slide-in-right {
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes blind-box-shake {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-5deg); }
+  75% { transform: rotate(5deg); }
+}
+.animate-blind-box:hover {
+  animation: blind-box-shake 0.5s ease-in-out;
+}

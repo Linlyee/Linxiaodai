@@ -1,0 +1,178 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  phone        String?
+  avatar       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  addresses     Address[]
+  preferences   TasteProfile?
+  conversations Conversation[]
+  orders        Order[]
+  favorites     FavoriteRestaurant[]
+  blindBoxResults BlindBoxResult[]
+  feedback      OrderFeedback[]
+}
+
+model Address {
+  id        String  @id @default(uuid())
+  userId    String
+  label     String
+  detail    String
+  lat       Float
+  lng       Float
+  isDefault Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+}
+
+model TasteProfile {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  spiceLevel          String   @default("medium")
+  dietaryPreferences  String[] @default([])
+  allergies           String[] @default([])
+  dislikedIngredients String[] @default([])
+  budgetMin           Int      @default(0)
+  budgetMax           Int      @default(100)
+  favoriteCuisines    String[] @default([])
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Restaurant {
+  id              String   @id @default(uuid())
+  name            String
+  description     String
+  imageUrl        String   @default("/images/restaurant-placeholder.svg")
+  rating          Float    @default(4.5)
+  ratingCount     Int      @default(0)
+  categories      String[]
+  address         String
+  lat             Float
+  lng             Float
+  deliveryFee     Float    @default(5)
+  minOrderAmount  Float    @default(20)
+  avgDeliveryTime Int      @default(30)
+  deliveryRange   Float    @default(5)
+  isOpen          Boolean  @default(true)
+  openingHours    String   @default("10:00-22:00")
+  phone           String
+  createdAt       DateTime @default(now())
+
+  menuItems MenuItem[]
+  orders    Order[]
+  favorites FavoriteRestaurant[]
+}
+
+model MenuItem {
+  id            String   @id @default(uuid())
+  restaurantId  String
+  name          String
+  description   String
+  imageUrl      String   @default("/images/food-placeholder.svg")
+  price         Float
+  originalPrice Float?
+  category      String
+  spiceLevel    String   @default("none")
+  isVegetarian  Boolean  @default(false)
+  ingredients   String[]
+  allergens     String[]
+  calories      Int      @default(0)
+  salesCount    Int      @default(0)
+  rating        Float    @default(4.5)
+  tags          String[] @default([])
+  createdAt     DateTime @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+}
+
+model Conversation {
+  id                String   @id @default(uuid())
+  userId            String
+  title             String   @default("新对话")
+  messages          Json     @default("[]")
+  extractedRequirements Json @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id                   String   @id @default(uuid())
+  userId               String
+  restaurantId         String
+  restaurantName       String
+  items                Json     @default("[]")
+  subtotal             Float
+  deliveryFee          Float    @default(0)
+  discount             Float    @default(0)
+  total                Float
+  status               String   @default("pending_payment")
+  deliveryAddressId    String
+  riderLat             Float?
+  riderLng             Float?
+  estimatedDeliveryTime Int
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  paidAt               DateTime?
+  deliveredAt          DateTime?
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant    Restaurant     @relation(fields: [restaurantId], references: [id])
+  address       Address        @relation(fields: [deliveryAddressId], references: [id])
+  feedback      OrderFeedback?
+}
+
+model OrderFeedback {
+  id       String   @id @default(uuid())
+  orderId  String   @unique
+  userId   String
+  rating   Int
+  tags     String[] @default([])
+  comment  String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model FavoriteRestaurant {
+  id           String   @id @default(uuid())
+  userId       String
+  restaurantId String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, restaurantId])
+}
+
+model BlindBoxResult {
+  id           String    @id @default(uuid())
+  userId       String
+  restaurantId String
+  menuItemId   String
+  reason       String
+  accepted     Boolean?
+  skippedAt    DateTime?
+  rating       Int?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
