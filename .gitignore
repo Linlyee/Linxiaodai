@@ -19,6 +19,14 @@
 
 # production
 /build
+/dist
+
+# local runtime
+/logs
+/backend/*.db
+/.venv
+__pycache__/
+*.py[cod]
 
 # misc
 .DS_Store

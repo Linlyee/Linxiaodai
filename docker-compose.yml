@@ -1,41 +1,24 @@
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: fanxiaozhi-db
-    environment:
-      POSTGRES_USER: fanxiaozhi
-      POSTGRES_PASSWORD: fanxiaozhi
-      POSTGRES_DB: fanxiaozhi
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fanxiaozhi"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  app:
+  api:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: fanxiaozhi-app
+      dockerfile: backend/Dockerfile
     environment:
-      DATABASE_URL: "postgresql://fanxiaozhi:fanxiaozhi@postgres:5432/fanxiaozhi?schema=public"
-      JWT_SECRET: "change-me-in-production"
-      AGENT_PROVIDER: "mock"
-      RESTAURANT_PROVIDER: "mock"
-      NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+      DATABASE_URL: "sqlite:////data/linxiaodai.db"
+    volumes:
+      - linxiaodai_data:/data
     ports:
-      - "3000:3000"
+      - "8000:8000"
+
+  web:
+    build:
+      context: .
+      args:
+        VITE_API_BASE_URL: "http://localhost:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
-    command: >
-      sh -c "npx prisma migrate deploy && npx prisma db seed && npm start"
+      - api
+    ports:
+      - "5173:4173"
 
 volumes:
-  postgres_data:
+  linxiaodai_data:

@@ -1,53 +1,34 @@
-// ========== 用户 & 认证 ==========
+export type SpiceLevel = 'none' | 'mild' | 'medium' | 'hot';
+
 export interface UserProfile {
   id: string;
   name: string;
   email: string;
-  phone?: string;
-  avatar?: string;
-  defaultAddress?: Address;
-  preferences: TasteProfile;
-  createdAt: string;
-  updatedAt: string;
+  role: 'customer' | 'merchant' | 'admin';
+  preferences: {
+    spiceLevel: SpiceLevel;
+    allergies: string[];
+    dislikedIngredients: string[];
+    budgetMin: number;
+    budgetMax: number;
+    favoriteCuisines: string[];
+  };
 }
 
-export interface Address {
-  id: string;
-  label: string;
-  detail: string;
-  lat: number;
-  lng: number;
-  isDefault: boolean;
-}
-
-export interface TasteProfile {
-  spiceLevel: 'none' | 'mild' | 'medium' | 'hot' | 'extra_hot';
-  dietaryPreferences: string[];
-  allergies: string[];
-  dislikedIngredients: string[];
-  budgetRange: { min: number; max: number };
-  favoriteCuisines: string[];
-}
-
-// ========== 餐厅 & 餐品 ==========
 export interface Restaurant {
   id: string;
   name: string;
   description: string;
-  imageUrl: string;
   rating: number;
   ratingCount: number;
   categories: string[];
   address: string;
-  lat: number;
-  lng: number;
   deliveryFee: number;
   minOrderAmount: number;
-  avgDeliveryTime: number; // 分钟
-  deliveryRange: number; // 公里
-  isOpen: boolean;
+  avgDeliveryTime: number;
   openingHours: string;
   phone: string;
+  imageUrl: string;
 }
 
 export interface MenuItem {
@@ -55,55 +36,18 @@ export interface MenuItem {
   restaurantId: string;
   name: string;
   description: string;
-  imageUrl: string;
   price: number;
   originalPrice?: number;
   category: string;
-  spiceLevel: 'none' | 'mild' | 'medium' | 'hot' | 'extra_hot';
-  isVegetarian: boolean;
+  spiceLevel: SpiceLevel;
   ingredients: string[];
   allergens: string[];
+  tags: string[];
   calories: number;
   salesCount: number;
   rating: number;
-  tags: string[];
-}
-
-// ========== 对话 & Agent ==========
-export interface Conversation {
-  id: string;
-  userId: string;
-  title: string;
-  messages: Message[];
-  extractedRequirements: ExtractedRequirements;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  actions?: AgentAction[];
-  recommendations?: RecommendationResult[];
-  createdAt: string;
-}
-
-export interface AgentAction {
-  type: 'extract_requirements' | 'recommend' | 'ask_clarification' | 'blind_box' | 'add_to_cart' | 'update_requirements' | 'confirm_order';
-  payload: Record<string, unknown>;
-}
-
-export interface ExtractedRequirements {
-  peopleCount?: number;
-  budget?: { min: number; max: number };
-  cuisines?: string[];
-  spiceLevel?: string;
-  mustAvoid?: string[];
-  preferredIngredients?: string[];
-  deliveryTimeLimit?: number; // 分钟
-  location?: { lat: number; lng: number; address: string };
-  additionalNotes?: string;
+  stock: number;
+  isAvailable: boolean;
 }
 
 export interface RecommendationResult {
@@ -116,19 +60,31 @@ export interface RecommendationResult {
   score: number;
 }
 
-// ========== 盲盒 ==========
-export interface BlindBoxResult {
-  id: string;
-  restaurant: Restaurant;
-  menuItem: MenuItem;
-  price: number;
-  reason: string;
-  accepted: boolean | null;
-  skippedAt?: string;
-  rating?: number;
+export interface ExtractedRequirements {
+  peopleCount?: number;
+  budget?: { min: number; max: number };
+  cuisines?: string[];
+  spiceLevel?: SpiceLevel;
+  mustAvoid?: string[];
+  deliveryTimeLimit?: number;
+  additionalNotes?: string;
 }
 
-// ========== 购物车 & 订单 ==========
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  recommendations?: RecommendationResult[];
+  createdAt: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CartItem {
   id: string;
   menuItem: MenuItem;
@@ -136,16 +92,12 @@ export interface CartItem {
   quantity: number;
 }
 
-export interface Cart {
-  items: CartItem[];
-  restaurantId?: string; // 同一订单只能来自一家餐厅
-}
-
 export type OrderStatus =
   | 'pending_payment'
   | 'paid'
   | 'accepted'
   | 'preparing'
+  | 'ready_for_pickup'
   | 'picked_up'
   | 'delivering'
   | 'completed'
@@ -153,50 +105,39 @@ export type OrderStatus =
 
 export interface Order {
   id: string;
-  userId: string;
-  restaurantId: string;
   restaurantName: string;
-  items: OrderItem[];
+  items: Array<{
+    id: string;
+    menuItemId: string;
+    name: string;
+    price: number;
+    quantity: number;
+  }>;
   subtotal: number;
   deliveryFee: number;
-  discount: number;
   total: number;
   status: OrderStatus;
-  deliveryAddress: Address;
-  riderLocation?: { lat: number; lng: number };
   estimatedDeliveryTime: number;
   createdAt: string;
   updatedAt: string;
-  paidAt?: string;
-  deliveredAt?: string;
-  feedback?: OrderFeedback;
+  address?: string;
+  note?: string;
+  events?: Array<{ status: OrderStatus; note: string; createdAt: string }>;
 }
 
-export interface OrderItem {
-  id: string;
-  menuItemId: string;
-  name: string;
-  price: number;
-  quantity: number;
-  imageUrl: string;
+export interface MerchantDashboard {
+  restaurant: Restaurant;
+  metrics: {
+    todayOrders: number;
+    todayRevenue: number;
+    pendingOrders: number;
+    activeOrders: number;
+  };
+  recentOrders: Order[];
 }
 
-export interface OrderFeedback {
-  rating: number;
-  tags: string[];
-  comment?: string;
-}
-
-// ========== API 通用 ==========
-export interface ApiResponse<T = unknown> {
+export interface ApiResponse<T> {
   success: boolean;
-  data?: T;
+  data: T;
   error?: string;
-  message?: string;
-}
-
-export interface PaginatedResponse<T> extends ApiResponse<T[]> {
-  total: number;
-  page: number;
-  pageSize: number;
 }
