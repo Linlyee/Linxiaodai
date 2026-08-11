@@ -695,6 +695,12 @@ button {
   margin-top: 14px;
 }
 
+.redirect-pending {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .composer {
   display: grid;
   grid-template-columns: 44px 1fr 44px;
