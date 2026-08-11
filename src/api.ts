@@ -1,11 +1,13 @@
 import type {
   ApiResponse,
+  BlindBoxOpenResult,
   CartItem,
   ChatMessage,
   ConversationSummary,
   ExtractedRequirements,
   MenuItem,
   Order,
+  ProviderSource,
   RecommendationResult,
   Restaurant,
   UserProfile,
@@ -72,14 +74,23 @@ export const api = {
   restaurants() {
     return request<Restaurant[]>('/api/restaurants');
   },
+  providers() {
+    return request<ProviderSource[]>('/api/providers');
+  },
   menuItems(restaurantId?: string) {
     const suffix = restaurantId ? `?restaurantId=${encodeURIComponent(restaurantId)}` : '';
     return request<MenuItem[]>(`/api/menu-items${suffix}`);
   },
   blindBox(requirements: ExtractedRequirements) {
-    return request<RecommendationResult>('/api/blind-box', {
+    return request<BlindBoxOpenResult>('/api/blind-box', {
       method: 'POST',
       body: JSON.stringify(requirements),
+    });
+  },
+  blindBoxFeedback(id: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') {
+    return request<{ ok: true }>(`/api/blind-box/${id}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
     });
   },
   orders() {

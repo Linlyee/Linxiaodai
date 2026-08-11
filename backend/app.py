@@ -15,7 +15,7 @@ from typing import Any, Literal
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -173,6 +173,51 @@ class OrderEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
 
 
+class BlindBoxRecord(Base):
+    __tablename__ = "blind_box_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    requirements_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_json: Mapped[str] = mapped_column(Text)
+    data_source: Mapped[str] = mapped_column(String(50), default="demo")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now(), index=True)
+
+
+class BlindBoxFeedback(Base):
+    __tablename__ = "blind_box_feedback"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    box_id: Mapped[str] = mapped_column(ForeignKey("blind_box_records.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    action: Mapped[str] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+
+
+class ProviderSource(Base):
+    __tablename__ = "provider_sources"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(30), default="demo", index=True)
+    sync_mode: Mapped[str] = mapped_column(String(30), default="manual")
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+
+
+class ProviderRestaurantLink(Base):
+    __tablename__ = "provider_restaurant_links"
+    __table_args__ = (UniqueConstraint("provider_key", "restaurant_id", name="uq_provider_restaurant_link"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider_key: Mapped[str] = mapped_column(ForeignKey("provider_sources.key"), index=True)
+    restaurant_id: Mapped[str] = mapped_column(ForeignKey("restaurants.id"), index=True)
+    external_restaurant_id: Mapped[str] = mapped_column(String(120))
+    order_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -256,6 +301,19 @@ def menu_data(item: MenuItem) -> dict[str, Any]:
     }
 
 
+def provider_data(source: ProviderSource, restaurant_count: int) -> dict[str, Any]:
+    return {
+        "key": source.key,
+        "name": source.name,
+        "status": source.status,
+        "syncMode": source.sync_mode,
+        "lastSyncedAt": source.last_synced_at.isoformat() if source.last_synced_at else None,
+        "lastError": source.last_error,
+        "restaurantCount": restaurant_count,
+        "orderRedirectEnabled": source.status == "authorized",
+    }
+
+
 def order_data(db: Session, order: Order, include_events: bool = False) -> dict[str, Any]:
     restaurant = db.get(Restaurant, order.restaurant_id)
     rows = db.scalars(select(OrderItem).where(OrderItem.order_id == order.id)).all()
@@ -328,10 +386,42 @@ def seed_database() -> None:
         ])
 
 
+def seed_provider_sources() -> None:
+    with SessionLocal.begin() as db:
+        source = db.get(ProviderSource, "demo")
+        if not source:
+            source = ProviderSource(
+                key="demo",
+                name="本地演示数据",
+                status="demo",
+                sync_mode="manual",
+                last_synced_at=utc_now(),
+            )
+            db.add(source)
+        restaurant_ids = db.scalars(select(Restaurant.id)).all()
+        linked = set(
+            db.scalars(
+                select(ProviderRestaurantLink.restaurant_id).where(ProviderRestaurantLink.provider_key == "demo")
+            ).all()
+        )
+        for restaurant_id in restaurant_ids:
+            if restaurant_id not in linked:
+                db.add(
+                    ProviderRestaurantLink(
+                        id=new_id(),
+                        provider_key="demo",
+                        restaurant_id=restaurant_id,
+                        external_restaurant_id=restaurant_id,
+                        last_synced_at=utc_now(),
+                    )
+                )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
     seed_database()
+    seed_provider_sources()
     yield
 
 
@@ -416,6 +506,10 @@ class MenuInput(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class BlindBoxFeedbackRequest(BaseModel):
+    action: Literal["liked", "disliked", "reopened", "platform_opened"]
+
+
 def extract_requirements(message: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     req = dict(existing or {})
     people = re.search(r"(\d+)\s*(?:个)?人", message)
@@ -459,6 +553,8 @@ def extract_requirements(message: str, existing: dict[str, Any] | None = None) -
 def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
     restaurants = {restaurant.id: restaurant for restaurant in db.scalars(select(Restaurant).where(Restaurant.is_open.is_(True))).all()}
     items = db.scalars(select(MenuItem).where(MenuItem.is_available.is_(True), MenuItem.stock > 0)).all()
+    sources = {source.key: source for source in db.scalars(select(ProviderSource)).all()}
+    links = {link.restaurant_id: link for link in db.scalars(select(ProviderRestaurantLink)).all()}
     ranked: list[tuple[float, MenuItem, Restaurant]] = []
     for item in items:
         restaurant = restaurants.get(item.restaurant_id)
@@ -489,6 +585,8 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3) -
         if item not in related:
             related.insert(0, item)
         total = round(sum(candidate.price for candidate in related), 2)
+        link = links.get(restaurant.id)
+        source = sources.get(link.provider_key if link else "demo")
         results.append({
             "restaurant": restaurant_data(restaurant),
             "menuItems": [menu_data(candidate) for candidate in related],
@@ -497,6 +595,14 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3) -
             "estimatedDeliveryTime": restaurant.avg_delivery_time,
             "reason": f"{restaurant.name}评分 {restaurant.rating}，预计 {restaurant.avg_delivery_time} 分钟送达，推荐 {item.name}",
             "score": round(max(score, 0), 1),
+            "heatScore": min(99, round(item.sales_count / 35 + item.rating * 12)),
+            "dataStatus": "synced" if source and source.status == "authorized" else "demo",
+            "syncedAt": link.last_synced_at.isoformat() if link and link.last_synced_at else None,
+            "provider": {
+                "key": source.key if source else "demo",
+                "name": source.name if source else "本地演示数据",
+                "orderUrl": link.order_url if link and source and source.status == "authorized" else None,
+            },
         })
         used.add(restaurant.id)
         if len(results) == limit:
@@ -571,6 +677,38 @@ def list_menu_items(restaurantId: str | None = None, db: Session = Depends(get_d
     return {"success": True, "data": [menu_data(row) for row in db.scalars(statement).all()]}
 
 
+@app.get("/api/providers")
+def list_provider_sources(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    sources = db.scalars(select(ProviderSource).order_by(ProviderSource.name)).all()
+    payload = []
+    for source in sources:
+        count = len(
+            db.scalars(
+                select(ProviderRestaurantLink.id).where(ProviderRestaurantLink.provider_key == source.key)
+            ).all()
+        )
+        payload.append(provider_data(source, count))
+    return {"success": True, "data": payload}
+
+
+@app.post("/api/providers/{provider_key}/sync")
+def sync_provider_source(provider_key: str, user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    source = db.get(ProviderSource, provider_key)
+    if not source:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "数据源不存在")
+    if source.status != "demo":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "授权数据源需要使用对应平台适配器同步")
+    source.last_synced_at = utc_now()
+    source.last_error = None
+    links = db.scalars(
+        select(ProviderRestaurantLink).where(ProviderRestaurantLink.provider_key == provider_key)
+    ).all()
+    for link in links:
+        link.last_synced_at = source.last_synced_at
+    db.commit()
+    return {"success": True, "data": provider_data(source, len(links))}
+
+
 @app.get("/api/chat")
 def list_or_get_conversations(id: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     if id:
@@ -611,7 +749,51 @@ def blind_box(requirements: dict[str, Any], user: User = Depends(current_user), 
     recs = recommendations(db, requirements, limit=5)
     if not recs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "没有符合条件的可售菜品")
-    return {"success": True, "data": recs[secrets.randbelow(len(recs))]}
+    primary_index = secrets.randbelow(min(3, len(recs)))
+    primary = recs.pop(primary_index)
+    record = BlindBoxRecord(
+        id=new_id(),
+        user_id=user.id,
+        requirements_json=json_value(requirements),
+        result_json=json_value(primary),
+        data_source="demo",
+    )
+    db.add(record)
+    db.commit()
+    return {
+        "success": True,
+        "data": {
+            "boxId": record.id,
+            "recommendation": primary,
+            "alternatives": recs[:2],
+            "dataStatus": "demo",
+            "message": "当前结果来自演示数据。接入授权平台后会显示实时价格、营业状态和跳转链接。",
+        },
+    }
+
+
+@app.post("/api/blind-box/{box_id}/feedback")
+def blind_box_feedback(box_id: str, payload: BlindBoxFeedbackRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    record = db.get(BlindBoxRecord, box_id)
+    if not record or record.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "盲盒记录不存在")
+    db.add(BlindBoxFeedback(id=new_id(), box_id=box_id, user_id=user.id, action=payload.action))
+    db.commit()
+    return {"success": True, "data": {"ok": True}}
+
+
+@app.get("/api/blind-box/history")
+def blind_box_history(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    records = db.scalars(
+        select(BlindBoxRecord).where(BlindBoxRecord.user_id == user.id).order_by(BlindBoxRecord.created_at.desc()).limit(20)
+    ).all()
+    return {
+        "success": True,
+        "data": [
+            {"id": record.id, "recommendation": parse_json(record.result_json, {}), "dataStatus": record.data_source, "createdAt": record.created_at.isoformat()}
+            for record in records
+        ],
+    }
 
 
 @app.get("/api/orders")

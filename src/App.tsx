@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   CreditCard,
+  Flame,
   Gift,
   LogOut,
   MessageSquarePlus,
@@ -14,6 +15,8 @@ import {
   Sparkles,
   Star,
   Store,
+  ThumbsDown,
+  ThumbsUp,
   User,
   Utensils,
 } from 'lucide-react';
@@ -26,6 +29,7 @@ import type {
   MerchantDashboard,
   Order,
   RecommendationResult,
+  ProviderSource,
   Restaurant,
   UserProfile,
 } from './types';
@@ -110,6 +114,7 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [requirements, setRequirements] = useState<ExtractedRequirements>({});
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [providers, setProviders] = useState<ProviderSource[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [activePanel, setActivePanel] = useState<'requirements' | 'cart' | 'orders'>('requirements');
@@ -125,6 +130,7 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
 
   useEffect(() => {
     api.restaurants().then(setRestaurants).catch(() => setRestaurants([]));
+    api.providers().then(setProviders).catch(() => setProviders([]));
     refreshConversations();
     refreshOrders();
   }, []);
@@ -166,11 +172,19 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     showToast('已加入购物车');
   };
 
-  const openBlindBox = async () => {
+  const openBlindBox = async (nextRequirements: ExtractedRequirements = requirements) => {
     try {
-      const recommendation = await api.blindBox(requirements);
-      setMessages(previous => [...previous, { id: crypto.randomUUID(), role: 'assistant', content: `盲盒已打开：今天试试 ${recommendation.restaurant.name}。${recommendation.reason}`, recommendations: [recommendation], createdAt: new Date().toISOString() }]);
+      const result = await api.blindBox(nextRequirements);
+      setRequirements(nextRequirements);
+      setMessages(previous => [...previous, { id: crypto.randomUUID(), role: 'assistant', content: `盲盒已打开：今天试试 ${result.recommendation.restaurant.name}。${result.recommendation.reason}`, recommendations: [result.recommendation], blindBoxId: result.boxId, createdAt: new Date().toISOString() }]);
     } catch (error) { showToast(error instanceof Error ? error.message : '盲盒暂时打不开'); }
+  };
+
+  const sendBlindBoxFeedback = async (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => {
+    try {
+      await api.blindBoxFeedback(boxId, action);
+      showToast(action === 'liked' ? '收到，之后会多推荐这一类。' : action === 'disliked' ? '收到，之后会减少这一类推荐。' : '已记录，你可以继续开一个。');
+    } catch { showToast('反馈暂未保存，请稍后重试。'); }
   };
 
   const createOrder = async () => {
@@ -198,14 +212,14 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
         {conversations.length ? conversations.map(conversation => <button className="conversation-item" key={conversation.id} onClick={() => loadConversation(conversation.id)}><strong>{conversation.title}</strong><span>{new Date(conversation.updatedAt).toLocaleString('zh-CN')}</span></button>) : <EmptyState title="还没有对话" description="告诉小呆你今天想吃什么。" />}
       </div>
     </aside>
-    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} isSending={isSending} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} />
-    <CustomerPanel active={activePanel} setActive={setActivePanel} requirements={requirements} cart={cart} setCart={setCart} orders={orders} onCreateOrder={createOrder} onUpdateOrder={updateOrder} />
+    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} isSending={isSending} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onFeedback={sendBlindBoxFeedback} />
+    <DecisionPanel requirements={requirements} providers={providers} />
     {toast && <div className="toast">{toast}</div>}
   </div>;
 }
 
-function ChatWorkspace({ messages, requirements, restaurantCount, isSending, onSend, onBlindBox, onAddToCart }: {
-  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; isSending: boolean; onSend: (message: string) => void; onBlindBox: () => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void;
+function ChatWorkspace({ messages, requirements, restaurantCount, isSending, onSend, onBlindBox, onAddToCart, onFeedback }: {
+  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; isSending: boolean; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
 }) {
   const [input, setInput] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
@@ -215,34 +229,34 @@ function ChatWorkspace({ messages, requirements, restaurantCount, isSending, onS
   return <main className="workspace">
     <header className="topbar"><div><h1>林小呆</h1><span>AI 外卖决策助手</span></div><div className="topbar-meta"><Utensils size={16} />已接入 {restaurantCount} 家餐厅</div></header>
     <section className="message-list">
-      {messages.length === 0 ? <div className="welcome"><Sparkles size={44} /><h2>今天这顿，交给小呆想想</h2><p>告诉我人数、预算、口味或忌口，我会给出可以直接下单的组合。</p><div className="quick-prompts">{examples.map(example => <button key={example} onClick={() => onSend(example)}>{example}</button>)}</div></div> : messages.map(message => <article className={`message ${message.role}`} key={message.id}><div className="bubble">{message.content}</div>{message.recommendations?.length ? <div className="recommendations">{message.recommendations.map(recommendation => <RecommendationCard key={`${recommendation.restaurant.id}-${recommendation.totalPrice}`} recommendation={recommendation} onAdd={onAddToCart} />)}</div> : null}</article>)}
+      {messages.length === 0 ? <BlindBoxLaunchpad requirements={requirements} onOpen={onBlindBox} onAsk={onSend} examples={examples} /> : messages.map(message => <article className={`message ${message.role}`} key={message.id}><div className="bubble">{message.content}</div>{message.recommendations?.length ? <div className="recommendations">{message.recommendations.map(recommendation => <RecommendationCard key={`${recommendation.restaurant.id}-${recommendation.totalPrice}`} recommendation={recommendation} onAdd={onAddToCart} blindBoxId={message.blindBoxId} onFeedback={onFeedback} />)}</div> : null}</article>)}
       {isSending && <div className="thinking"><span /><span /><span />小呆正在匹配餐厅...</div>}<div ref={endRef} />
     </section>
-    <footer className="composer"><button className="icon-action" title="外卖盲盒" onClick={onBlindBox}><Gift size={20} /></button><textarea value={input} rows={1} placeholder={summaryText(requirements) || '告诉我想吃什么，例如：两个人、想吃辣、60 元以内'} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} /><button className="send-button" title="发送消息" disabled={!input.trim() || isSending} onClick={submit}><Send size={19} /></button></footer>
+    <footer className="composer"><button className="icon-action" title="外卖盲盒" onClick={() => onBlindBox()}><Gift size={20} /></button><textarea value={input} rows={1} placeholder={summaryText(requirements) || '告诉我想吃什么，例如：两个人、想吃辣、60 元以内'} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} /><button className="send-button" title="发送消息" disabled={!input.trim() || isSending} onClick={submit}><Send size={19} /></button></footer>
   </main>;
 }
 
-function RecommendationCard({ recommendation, onAdd }: { recommendation: RecommendationResult; onAdd: (recommendation: RecommendationResult, index?: number) => void }) {
+function BlindBoxLaunchpad({ requirements, onOpen, onAsk, examples }: { requirements: ExtractedRequirements; onOpen: (requirements: ExtractedRequirements) => void; onAsk: (message: string) => void; examples: string[] }) {
+  const [budget, setBudget] = useState(50);
+  const [mood, setMood] = useState<'any' | 'spicy' | 'light'>('any');
+  const boxRequirements: ExtractedRequirements = { ...requirements, budget: { min: 0, max: budget }, spiceLevel: mood === 'spicy' ? 'medium' : mood === 'light' ? 'none' : requirements.spiceLevel };
+  return <div className="blindbox-launchpad"><div className="blindbox-orbit"><Gift size={42} /></div><p className="eyebrow">不知道吃什么，就交给一点惊喜</p><h2>开一个午餐盲盒</h2><p className="blindbox-copy">小呆会先避开忌口与最近吃过的店，再用预算、口味和热度挑一份刚刚好的答案。</p><div className="box-control"><span>预算</span><div className="chip-row">{[30, 50, 80].map(value => <button className={budget === value ? 'selected' : ''} key={value} onClick={() => setBudget(value)}>¥{value}</button>)}</div></div><div className="box-control"><span>今天想吃</span><div className="chip-row"><button className={mood === 'any' ? 'selected' : ''} onClick={() => setMood('any')}>随意</button><button className={mood === 'spicy' ? 'selected' : ''} onClick={() => setMood('spicy')}>来点辣</button><button className={mood === 'light' ? 'selected' : ''} onClick={() => setMood('light')}>清淡些</button></div></div><button className="open-box-button" onClick={() => onOpen(boxRequirements)}><Gift size={20} />现在开盒</button><div className="quick-prompts">{examples.map(example => <button key={example} onClick={() => onAsk(example)}>{example}</button>)}</div></div>;
+}
+
+function RecommendationCard({ recommendation, onAdd, blindBoxId, onFeedback }: { recommendation: RecommendationResult; onAdd: (recommendation: RecommendationResult, index?: number) => void; blindBoxId?: string; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void }) {
   return <div className="recommendation-card">
     <div className="rec-header"><div><h3>{recommendation.restaurant.name}</h3><p>{recommendation.restaurant.description}</p></div><span className="score">{Math.round(recommendation.score)} 分</span></div>
-    <div className="rec-meta"><span><Star size={15} />{recommendation.restaurant.rating}</span><span><Clock3 size={15} />{recommendation.estimatedDeliveryTime} 分钟</span><span>配送 ¥{recommendation.deliveryFee}</span></div>
+    <div className="rec-meta"><span><Star size={15} />{recommendation.restaurant.rating}</span><span><Clock3 size={15} />{recommendation.estimatedDeliveryTime} 分钟</span><span><Flame size={15} />热度 {recommendation.heatScore}</span></div>
     <p className="rec-reason">{recommendation.reason}</p>
+    <div className={`data-status ${recommendation.dataStatus}`}><span>{recommendation.dataStatus === 'synced' ? '已授权同步' : '演示数据'}</span>{recommendation.provider?.orderUrl ? `来自 ${recommendation.provider.name}，可跳转至原平台下单` : '实时平台同步功能正在接入，暂不可跳转下单'}</div>
     <div className="menu-list">{recommendation.menuItems.map((item, index) => <div className="menu-row" key={item.id}><div><strong>{item.name}</strong><span>{item.tags.join(' / ') || item.description}</span></div><button onClick={() => onAdd(recommendation, index)}>¥{item.price}</button></div>)}</div>
-    <div className="rec-footer"><b>菜品 ¥{recommendation.totalPrice} + 配送 ¥{recommendation.deliveryFee}</b><button className="primary-button compact" onClick={() => onAdd(recommendation)}><ShoppingCart size={17} />加入购物车</button></div>
+    <div className="rec-footer"><b>菜品 ¥{recommendation.totalPrice} + 配送 ¥{recommendation.deliveryFee}</b>{recommendation.provider?.orderUrl ? <a className="primary-button compact" href={recommendation.provider.orderUrl} target="_blank" rel="noreferrer" onClick={() => blindBoxId && onFeedback(blindBoxId, 'platform_opened')}>前往 {recommendation.provider.name} 下单</a> : !blindBoxId && <button className="primary-button compact" onClick={() => onAdd(recommendation)}><ShoppingCart size={17} />查看组合</button>}</div>
+    {blindBoxId && <div className="feedback-row"><span>这次合胃口吗？</span><button onClick={() => onFeedback(blindBoxId, 'liked')}><ThumbsUp size={15} />喜欢</button><button onClick={() => onFeedback(blindBoxId, 'disliked')}><ThumbsDown size={15} />换个口味</button></div>}
   </div>;
 }
 
-function CustomerPanel({ active, setActive, requirements, cart, setCart, orders, onCreateOrder, onUpdateOrder }: {
-  active: 'requirements' | 'cart' | 'orders'; setActive: (tab: 'requirements' | 'cart' | 'orders') => void; requirements: ExtractedRequirements; cart: CartItem[]; setCart: (cart: CartItem[]) => void; orders: Order[]; onCreateOrder: () => void; onUpdateOrder: (id: string, action: 'pay' | 'cancel') => void;
-}) {
-  const subtotal = useMemo(() => cart.reduce((total, item) => total + item.menuItem.price * item.quantity, 0), [cart]);
-  const deliveryFee = cart[0]?.restaurant.deliveryFee || 0;
-  const quantity = (id: string, value: number) => setCart(value > 0 ? cart.map(item => item.id === id ? { ...item, quantity: value } : item) : cart.filter(item => item.id !== id));
-  return <aside className="right-panel"><nav className="panel-tabs"><button className={active === 'requirements' ? 'active' : ''} onClick={() => setActive('requirements')}>摘要</button><button className={active === 'cart' ? 'active' : ''} onClick={() => setActive('cart')}>购物车{cart.length ? ` (${cart.reduce((sum, item) => sum + item.quantity, 0)})` : ''}</button><button className={active === 'orders' ? 'active' : ''} onClick={() => setActive('orders')}>订单</button></nav>
-    {active === 'requirements' && <RequirementsPanel requirements={requirements} />}
-    {active === 'cart' && <section className="panel-body">{cart.length ? <><h2>{cart[0].restaurant.name}</h2><div className="cart-list">{cart.map(item => <div className="cart-row" key={item.id}><div><strong>{item.menuItem.name}</strong><span>¥{item.menuItem.price}</span></div><div className="stepper"><button onClick={() => quantity(item.id, item.quantity - 1)}>-</button><b>{item.quantity}</b><button onClick={() => quantity(item.id, item.quantity + 1)}>+</button></div></div>)}</div><div className="checkout-box"><span>菜品 <b>¥{subtotal}</b></span><span>配送 <b>¥{deliveryFee}</b></span><strong>应付 <b>¥{subtotal + deliveryFee}</b></strong><button className="primary-button" onClick={onCreateOrder}><CreditCard size={18} />提交订单</button></div></> : <EmptyState title="购物车是空的" description="在推荐菜品中点击价格即可加入。" />}</section>}
-    {active === 'orders' && <section className="panel-body">{orders.length ? orders.map(order => <OrderCard key={order.id} order={order} action={onUpdateOrder} />) : <EmptyState title="暂无订单" description="下单后会在这里看到进度。" />}</section>}
-  </aside>;
+function DecisionPanel({ requirements, providers }: { requirements: ExtractedRequirements; providers: ProviderSource[] }) {
+  return <aside className="right-panel decision-panel"><section className="panel-body"><h2>本次偏好</h2><div className="requirement-list"><div className="requirement-row"><span>预算</span><strong>{requirements.budget ? `¥${requirements.budget.max} 以内` : '未限定'}</strong></div><div className="requirement-row"><span>口味</span><strong>{requirements.spiceLevel ? spiceLabel[requirements.spiceLevel] : '随意'}</strong></div><div className="requirement-row"><span>忌口</span><strong>{requirements.mustAvoid?.join('、') || '无'}</strong></div></div><h2 className="source-title">数据源</h2><div className="source-list">{providers.length ? providers.map(provider => <div className="source-row" key={provider.key}><div><strong>{provider.name}</strong><span>{provider.restaurantCount} 家餐厅 · {provider.lastSyncedAt ? `更新于 ${new Date(provider.lastSyncedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '等待同步'}</span></div><b className={provider.status}>{provider.status === 'authorized' ? '已授权' : provider.status === 'error' ? '异常' : '演示'}</b></div>) : <EmptyState title="暂无数据源" description="授权连接后会显示同步状态。" />}</div><div className="hint-box"><Gift size={20} /><p>林小呆只负责筛选与开盒。接入授权平台后，结果会显示实时信息并跳转至原平台完成下单。</p></div></section></aside>;
 }
 
 function OrderCard({ order, action }: { order: Order; action: (id: string, action: 'pay' | 'cancel') => void }) {

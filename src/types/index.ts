@@ -58,6 +58,33 @@ export interface RecommendationResult {
   estimatedDeliveryTime: number;
   reason: string;
   score: number;
+  heatScore: number;
+  dataStatus: 'demo' | 'synced';
+  syncedAt: string | null;
+  provider: {
+    key: string;
+    name: string;
+    orderUrl: string | null;
+  };
+}
+
+export interface ProviderSource {
+  key: string;
+  name: string;
+  status: 'demo' | 'authorized' | 'error';
+  syncMode: string;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  restaurantCount: number;
+  orderRedirectEnabled: boolean;
+}
+
+export interface BlindBoxOpenResult {
+  boxId: string;
+  recommendation: RecommendationResult;
+  alternatives: RecommendationResult[];
+  dataStatus: 'demo' | 'synced';
+  message: string;
 }
 
 export interface ExtractedRequirements {
@@ -75,6 +102,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   recommendations?: RecommendationResult[];
+  blindBoxId?: string;
   createdAt: string;
 }
 
