@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChefHat,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   Compass,
   Copy,
@@ -22,6 +23,8 @@ import {
   History,
   LockKeyhole,
   LogOut,
+  MapPin,
+  Menu,
   MessageSquarePlus,
   MessageCircle,
   Meh,
@@ -84,6 +87,17 @@ interface AppetiteProfile {
   note: string;
   className: string;
   requirements: ExtractedRequirements;
+}
+
+function loadRecentAddresses(userId: string) {
+  const current = localStorage.getItem(`linxiaodai:address:${userId}`) || '';
+  try {
+    const stored = JSON.parse(localStorage.getItem(`linxiaodai:recent-addresses:${userId}`) || '[]');
+    const values = Array.isArray(stored) ? stored.filter(value => typeof value === 'string' && value.trim()) : [];
+    return [...new Set([current, ...values].filter(Boolean))].slice(0, 4);
+  } catch {
+    return current ? [current] : [];
+  }
 }
 
 const appetiteQuestions: Array<{ eyebrow: string; title: string; options: Array<{ value: AppetiteAnswer; icon: ComponentType<{ size?: number; strokeWidth?: number }>; label: string; hint: string }> }> = [
@@ -183,6 +197,9 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   const [activePanel, setActivePanel] = useState<'requirements' | 'saved' | 'cart' | 'orders'>('requirements');
   const [isMobilePanelOpen, setIsMobilePanelOpen] = useState(false);
   const [deliveryAddress, setDeliveryAddress] = useState(() => localStorage.getItem(`linxiaodai:address:${user.id}`) || '');
+  const [recentAddresses, setRecentAddresses] = useState<string[]>(() => loadRecentAddresses(user.id));
+  const [isAddressDialogOpen, setIsAddressDialogOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [orderNote, setOrderNote] = useState('');
   const [diningRoomOpen, setDiningRoomOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -203,6 +220,20 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     setToast(message); setToastUndo(() => undo);
     toastTimerRef.current = window.setTimeout(() => { setToast(''); setToastUndo(null); }, 5000);
+  };
+  const rememberDeliveryAddress = (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    const next = [normalized, ...recentAddresses.filter(address => address !== normalized)].slice(0, 4);
+    setDeliveryAddress(normalized);
+    setRecentAddresses(next);
+    localStorage.setItem(`linxiaodai:address:${user.id}`, normalized);
+    localStorage.setItem(`linxiaodai:recent-addresses:${user.id}`, JSON.stringify(next));
+  };
+  const removeRecentAddress = (value: string) => {
+    const next = recentAddresses.filter(address => address !== value);
+    setRecentAddresses(next);
+    localStorage.setItem(`linxiaodai:recent-addresses:${user.id}`, JSON.stringify(next));
   };
   const refreshConversations = () => api.conversations().then(setConversations).catch(() => setConversations([]));
   const refreshOrders = () => api.orders().then(setOrders).catch(() => setOrders([]));
@@ -269,7 +300,12 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     try {
       const detail = await api.conversation(id);
       setConversationId(id); setMessages(detail.messages); setRequirements(detail.extractedRequirements || {});
+      setIsHistoryOpen(false);
     } catch { showToast('读取对话失败'); }
+  };
+
+  const startNewConversation = () => {
+    setConversationId(null); setMessages([]); setRequirements({}); setIsHistoryOpen(false);
   };
 
   const addToCart = (recommendation: RecommendationResult, index = 0) => {
@@ -331,7 +367,7 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     setIsCreatingOrder(true);
     try {
       const order = await api.createOrder(cart, address, orderNote.trim());
-      localStorage.setItem(`linxiaodai:address:${user.id}`, address);
+      rememberDeliveryAddress(address);
       setCart([]); setOrders(previous => [order, ...previous]); setActivePanel('orders');
       setOrderNote('');
       showToast('订单已创建，请完成演示支付');
@@ -367,14 +403,14 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     <a className="skip-link" href="#main-content">跳到主要内容</a>
     <aside className="sidebar" aria-label="对话导航">
       <div className="sidebar-brand"><div className="brand-mark small"><ChefHat size={19} /></div><div><strong>林小呆</strong><span>AI DINING</span></div></div>
-      <button className="new-chat" onClick={() => { setConversationId(null); setMessages([]); setRequirements({}); }}><MessageSquarePlus size={17} />开启新对话</button>
+      <button className="new-chat" onClick={startNewConversation}><MessageSquarePlus size={17} />开启新对话</button>
       <div className="side-content">
         <h3 className="side-heading"><History size={14} />最近对话</h3>
-        {conversations.length ? conversations.map(conversation => <button className="conversation-item" key={conversation.id} onClick={() => loadConversation(conversation.id)}><strong>{conversation.title}</strong><span>{new Date(conversation.updatedAt).toLocaleString('zh-CN')}</span></button>) : <EmptyState title="还没有对话" description="告诉小呆你今天想吃什么。" />}
+        {conversations.length ? conversations.map(conversation => <ConversationNavItem key={conversation.id} conversation={conversation} active={conversation.id === conversationId} onSelect={loadConversation} />) : <EmptyState title="还没有对话" description="告诉小呆你今天想吃什么。" />}
       </div>
       <div className="profile-card"><div className="profile-avatar">{user.name.slice(0, 1)}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button className="logout-icon" title="退出登录" onClick={onLogout}><LogOut size={16} /></button></div>
     </aside>
-    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} savedMeals={savedMeals} isSending={isSending} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onSaveMeal={saveRecommendation} onFeedback={sendBlindBoxFeedback} />
+    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} deliveryAddress={deliveryAddress} savedMeals={savedMeals} isSending={isSending} onOpenHistory={() => setIsHistoryOpen(true)} onOpenAddress={() => setIsAddressDialogOpen(true)} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onSaveMeal={saveRecommendation} onFeedback={sendBlindBoxFeedback} />
     <button className="dining-room-fab" onClick={() => setDiningRoomOpen(true)}><UsersRound size={18} /><span>和饭搭子一起选</span></button>
     <aside className={`right-panel ${isMobilePanelOpen ? 'panel-open' : ''}`} aria-label="点餐详情">
       <button className="mobile-panel-close" aria-label="关闭详情面板" onClick={() => setIsMobilePanelOpen(false)}><X size={20} /></button>
@@ -388,11 +424,79 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     <nav className="mobile-nav" aria-label="主要导航"><button className={!isMobilePanelOpen ? 'active' : ''} onClick={() => setIsMobilePanelOpen(false)}><MessageCircle size={20} />对话</button><button className={isMobilePanelOpen && activePanel === 'requirements' ? 'active' : ''} onClick={() => openPanel('requirements')}><SlidersHorizontal size={20} />偏好</button><button className={isMobilePanelOpen && activePanel === 'saved' ? 'active' : ''} onClick={() => openPanel('saved')}><span><Bookmark size={20} />{savedMeals.length > 0 && <b>{savedMeals.length}</b>}</span>收藏</button><button className={isMobilePanelOpen && activePanel === 'cart' ? 'active' : ''} onClick={() => openPanel('cart')}><span><ShoppingCart size={20} />{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.quantity, 0)}</b>}</span>购物车</button><button className={isMobilePanelOpen && activePanel === 'orders' ? 'active' : ''} onClick={() => openPanel('orders')}><span><PackageCheck size={20} />{activeOrderCount > 0 && <b>{activeOrderCount}</b>}</span>订单</button></nav>
     {toast && <div className="toast" role="status" aria-live="polite"><span>{toast}</span>{toastUndo && <button type="button" onClick={async () => { const undo = toastUndo; setToast(''); setToastUndo(null); try { await undo(); showToast('已恢复到收藏夹'); } catch (error) { showToast(error instanceof Error ? error.message : '恢复失败，请重试'); } }}>撤销</button>}</div>}
     {diningRoomOpen && <DiningRoomDialog requirements={requirements} onClose={() => setDiningRoomOpen(false)} onPick={candidate => { setDiningRoomOpen(false); setMessages(previous => [...previous, { id: crypto.randomUUID(), role: 'assistant', content: `饭搭子们选中了 ${candidate.restaurant.name}。${candidate.reason}`, recommendations: [{ ...candidate, score: 100, heatScore: 0, dataStatus: 'demo', syncedAt: null, provider: { key: 'group', name: '饭搭子共识', orderUrl: null } }], createdAt: new Date().toISOString() }]); }} />}
+    {isAddressDialogOpen && <AddressDialog currentAddress={deliveryAddress} recentAddresses={recentAddresses} onClose={() => setIsAddressDialogOpen(false)} onRemoveRecent={removeRecentAddress} onSave={value => { rememberDeliveryAddress(value); setIsAddressDialogOpen(false); showToast('送达地址已更新，结算时会自动带入'); }} />}
+    {isHistoryOpen && <MobileHistoryDrawer conversations={conversations} activeId={conversationId} onClose={() => setIsHistoryOpen(false)} onNew={startNewConversation} onSelect={loadConversation} />}
   </div>;
 }
 
-function ChatWorkspace({ messages, requirements, restaurantCount, savedMeals, isSending, onSend, onBlindBox, onAddToCart, onSaveMeal, onFeedback }: {
-  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; savedMeals: SavedMeal[]; isSending: boolean; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
+function formatConversationTime(value: string) {
+  const date = new Date(value);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) return `今天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return `昨天 ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+function ConversationNavItem({ conversation, active, onSelect }: { conversation: ConversationSummary; active: boolean; onSelect: (id: string) => void }) {
+  return <button className={`conversation-item ${active ? 'active' : ''}`} type="button" aria-current={active ? 'page' : undefined} aria-label={`${conversation.title}，${formatConversationTime(conversation.updatedAt)}`} onClick={() => onSelect(conversation.id)}><i><MessageCircle size={15} /></i><span className="conversation-copy"><strong>{conversation.title}</strong><small>{formatConversationTime(conversation.updatedAt)}</small></span></button>;
+}
+
+function AddressDialog({ currentAddress, recentAddresses, onClose, onRemoveRecent, onSave }: { currentAddress: string; recentAddresses: string[]; onClose: () => void; onRemoveRecent: (value: string) => void; onSave: (value: string) => void }) {
+  const [draft, setDraft] = useState(currentAddress);
+  const [touched, setTouched] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    inputRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])') || [])];
+      if (!focusable.length) return;
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => { document.removeEventListener('keydown', handleKeyDown); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
+  }, []);
+  const submit = (event: FormEvent) => {
+    event.preventDefault(); setTouched(true);
+    if (!draft.trim()) { inputRef.current?.focus(); return; }
+    onSave(draft);
+  };
+  return <div className="address-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}><section ref={dialogRef} className="address-dialog" role="dialog" aria-modal="true" aria-labelledby="address-dialog-title"><button className="address-close" type="button" aria-label="关闭地址设置" onClick={onClose}><X size={19} /></button><header><span>DELIVERY CONTEXT</span><h2 id="address-dialog-title">这一餐送到哪里？</h2><p>提前设置后，结算会自动带入；接入授权渠道后也可用于配送估时。</p></header><form onSubmit={submit} noValidate><label htmlFor="global-delivery-address">详细地址 <b>必填</b></label><div className={`address-input ${touched && !draft.trim() ? 'invalid' : ''}`}><MapPin size={18} /><input ref={inputRef} id="global-delivery-address" value={draft} maxLength={255} autoComplete="street-address" aria-invalid={touched && !draft.trim()} aria-describedby="global-address-help" placeholder="例如：国贸三期 B 座 1208" onBlur={() => setTouched(true)} onChange={event => setDraft(event.target.value)} /></div><small id="global-address-help" className={touched && !draft.trim() ? 'field-error' : 'field-help'}>{touched && !draft.trim() ? '请填写楼栋、单元或房间号，方便准确送达。' : '地址保存在当前设备，并用于结算和订单履约。'}</small>{recentAddresses.length > 0 && <div className="recent-addresses"><span>最近使用</span>{recentAddresses.map(address => <div className="recent-address-row" key={address}><button className={`recent-address-option ${draft === address ? 'selected' : ''}`} type="button" onClick={() => { setDraft(address); setTouched(true); inputRef.current?.focus(); }}><MapPin size={15} /><b>{address}</b>{draft === address && <CheckCircle2 size={16} />}</button>{address !== currentAddress && <button className="recent-address-remove" type="button" aria-label={`移除最近地址：${address}`} onClick={() => onRemoveRecent(address)}><Trash2 size={15} /></button>}</div>)}</div>}<button className="primary-button address-save" type="submit">保存并用于点餐 <ArrowRight size={17} /></button></form></section></div>;
+}
+
+function MobileHistoryDrawer({ conversations, activeId, onClose, onNew, onSelect }: { conversations: ConversationSummary[]; activeId: string | null; onClose: () => void; onNew: () => void; onSelect: (id: string) => void }) {
+  const drawerRef = useRef<HTMLElement>(null);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    newButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])') || [])];
+      if (!focusable.length) return;
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => { document.removeEventListener('keydown', handleKeyDown); document.body.style.overflow = previousOverflow; previousFocus?.focus(); };
+  }, []);
+  return <div className="history-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}><aside ref={drawerRef} className="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-drawer-title"><header><div className="brand-mark small"><ChefHat size={19} /></div><div><span>YOUR FOOD THREADS</span><h2 id="history-drawer-title">最近对话</h2></div><button type="button" aria-label="关闭最近对话" onClick={onClose}><X size={19} /></button></header><button ref={newButtonRef} className="history-new" type="button" onClick={onNew}><MessageSquarePlus size={17} />开启新对话</button><div className="history-list">{conversations.length ? conversations.map(conversation => <ConversationNavItem key={conversation.id} conversation={conversation} active={conversation.id === activeId} onSelect={onSelect} />) : <div className="history-empty"><MessageCircle size={24} /><b>还没有历史对话</b><span>说出今天想吃什么，第一条记录就会出现在这里。</span></div>}</div><footer><LockKeyhole size={14} />历史对话仅当前账号可见</footer></aside></div>;
+}
+
+function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddress, savedMeals, isSending, onOpenHistory, onOpenAddress, onSend, onBlindBox, onAddToCart, onSaveMeal, onFeedback }: {
+  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; deliveryAddress: string; savedMeals: SavedMeal[]; isSending: boolean; onOpenHistory: () => void; onOpenAddress: () => void; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
 }) {
   const [input, setInput] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -405,7 +509,7 @@ function ChatWorkspace({ messages, requirements, restaurantCount, savedMeals, is
   const recoveryOptions = latestMessage?.role === 'assistant' && !latestMessage.recommendations?.length && !isSending ? buildRecoveryOptions(requirements) : [];
   const suggestions = buildComposerSuggestions(input, requirements);
   return <main className="workspace" id="main-content">
-    <header className="topbar"><div><span className="topbar-kicker">TODAY'S PICK</span><h1>今天想吃点什么？</h1></div><div className="topbar-meta"><span className="status-dot" />{restaurantCount} 家可选门店</div></header>
+    <header className="topbar"><button className="topbar-history" type="button" aria-label="打开最近对话" onClick={onOpenHistory}><Menu size={20} /></button><div className="topbar-title"><span className="topbar-kicker">TODAY'S PICK</span><h1>今天想吃点什么？</h1></div><div className="topbar-actions"><button className={`delivery-location ${deliveryAddress ? 'ready' : ''}`} type="button" aria-label={deliveryAddress ? `当前送到：${deliveryAddress}，点击修改` : '设置送达地址'} aria-haspopup="dialog" onClick={onOpenAddress}><MapPin size={17} /><span><small>{deliveryAddress ? '当前送到' : '配送位置'}</small><strong>{deliveryAddress || '设置送达地址'}</strong></span><ChevronDown size={15} /></button><div className="topbar-meta"><span className="status-dot" />{restaurantCount} 家可选门店</div></div></header>
     <section className="message-list">
       {messages.length === 0 ? <BlindBoxLaunchpad requirements={requirements} onOpen={onBlindBox} onAsk={onSend} examples={examples} /> : messages.map(message => <article className={`message ${message.role}`} key={message.id}><div className="bubble">{message.content}</div>{message.recommendations?.length ? <div className="recommendations">{message.recommendations.map(recommendation => { const itemIds = recommendation.menuItems.map(item => item.id).sort().join('|'); const isSaved = savedMeals.some(saved => saved.restaurant?.id === recommendation.restaurant.id && [...saved.menuItemIds].sort().join('|') === itemIds); return <RecommendationCard key={`${recommendation.restaurant.id}-${recommendation.totalPrice}`} recommendation={recommendation} isSaved={isSaved} onAdd={onAddToCart} onSave={onSaveMeal} blindBoxId={message.blindBoxId} onFeedback={onFeedback} />; })}</div> : null}</article>)}
       {recoveryOptions.length > 0 && <section className="search-recovery" aria-label="调整搜索条件"><div><RotateCcw size={18} /><span><b>换个条件，马上再找</b><small>保留其他偏好，只调整最可能卡住结果的条件</small></span></div><div className="recovery-actions">{recoveryOptions.map(option => <button key={option.prompt} type="button" onClick={() => onSend(option.prompt)}><strong>{option.label}</strong><span>{option.detail}</span></button>)}</div></section>}
