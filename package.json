@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "dev:backend": "python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload",
     "build": "vite build",
+    "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1",
     "format": "prettier --write .",
     "push": "node push-to-github.mjs"
@@ -23,6 +24,7 @@
     "@types/react-dom": "^19",
     "prettier": "^3.9.6",
     "typescript": "^5",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "vitest": "^4.1.11"
   }
 }

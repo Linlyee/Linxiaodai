@@ -4034,3 +4034,222 @@ summary {
   .address-dialog,
   .history-drawer { animation: none !important; }
 }
+
+/* Personalized decision home — compact first paint, fast comparison and confident action */
+.blindbox-launchpad {
+  width: min(780px, 100%);
+  max-width: 780px;
+  min-height: 100%;
+  align-content: start;
+  justify-items: stretch;
+  gap: 14px;
+  padding: 2px 0 24px;
+  text-align: left;
+}
+
+.meal-context-bar {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 3px;
+  border-bottom: 1px solid #e0e6e1;
+}
+
+.meal-context-bar > span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  color: var(--forest);
+}
+
+.meal-context-bar > span > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4f9f78;
+  box-shadow: 0 0 0 4px rgba(79,159,120,0.12);
+}
+
+.meal-context-bar > span b { font-size: 12px; }
+.meal-context-bar > span small { overflow: hidden; color: #84918b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.meal-context-bar > div { display: flex; align-items: center; gap: 7px; }
+.meal-context-bar > div span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #7b8982;
+  background: #f0f3ef;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.meal-context-bar > div span.ready { color: #31684f; background: #e6f1e9; }
+
+.launch-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .82fr) minmax(270px, 1.18fr);
+  align-items: center;
+  gap: clamp(14px, 2vw, 20px);
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid #dce5df;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(215,231,220,0.78), transparent 34%),
+    radial-gradient(circle at 92% 92%, rgba(246,220,211,0.46), transparent 32%),
+    rgba(255,255,255,0.8);
+  box-shadow: 0 16px 44px rgba(31,55,48,0.07);
+}
+
+.launch-story {
+  min-width: 0;
+  display: block;
+}
+
+.launch-story .launch-visual { width: 96px; height: 72px; margin: 0 0 7px; }
+.launch-story .visual-ring.outer { width: 90px; height: 58px; }
+.launch-story .visual-ring.inner { width: 74px; height: 67px; }
+.launch-story .blindbox-orbit { width: 48px; height: 48px; box-shadow: 0 10px 24px rgba(23,63,54,0.18), 0 0 0 6px rgba(231,239,234,0.78); }
+.launch-story .blindbox-orbit svg { width: 23px; height: 23px; }
+.launch-story .visual-note { padding: 5px 7px; font-size: 8px; }
+.launch-story .note-one { top: -3px; right: -8px; }
+.launch-story .note-two { bottom: -2px; left: -4px; }
+.launch-story .eyebrow { margin: 0 0 7px; font-size: 9px; }
+.launch-story h2 { margin: 0; font-size: clamp(27px, 2.35vw, 31px); line-height: 1.22; white-space: nowrap; }
+.launch-story .blindbox-copy { margin-top: 10px; color: #6c7c74; font-size: 12px; line-height: 1.65; }
+
+.launch-actions { min-width: 0; display: grid; gap: 9px; }
+.launch-actions .appetite-entry { width: 100%; margin: 0; }
+.launch-actions .control-card { width: 100%; gap: 7px; margin: 0; padding: 10px 11px; border-radius: 14px; box-shadow: none; }
+.launch-actions .box-control { grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
+.launch-actions .chip-row { flex-wrap: nowrap; gap: 6px; }
+.launch-actions .chip-row button { min-width: 0; flex: 1 1 0; padding: 0 8px; }
+.launch-actions .open-box-button { width: 100%; min-height: 48px; margin: 0; }
+.launch-actions .open-box-button:disabled { cursor: wait; opacity: .72; box-shadow: none; }
+.launch-trust { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 0; color: #788880; font-size: 10px; }
+.launch-trust svg { flex: 0 0 auto; color: #438263; }
+
+.occasion-shortcuts {
+  display: grid;
+  gap: 9px;
+  padding: 13px 14px 14px;
+  border: 1px solid #e0e6e1;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.66);
+}
+
+.occasion-shortcuts > header { display: flex; align-items: baseline; gap: 9px; }
+.occasion-shortcuts > header span { color: #9aa59f; font-size: 8px; font-weight: 900; letter-spacing: .16em; }
+.occasion-shortcuts > header h3 { color: var(--forest); font-family: Georgia,"Songti SC",serif; font-size: 17px; font-weight: 500; }
+.occasion-shortcuts > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.occasion-shortcuts > div > button {
+  min-width: 0;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 9px 9px 10px;
+  border: 1px solid #dfe6e1;
+  border-radius: 13px;
+  color: #697970;
+  background: #fbfcfa;
+  text-align: left;
+  transition: color var(--motion-fast) ease, border-color var(--motion-fast) ease, background-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+.occasion-shortcuts > div > button:hover,
+.occasion-shortcuts > div > button:focus-visible { border-color: #a9bdb1; color: var(--forest); background: #f0f6f2; box-shadow: 0 7px 18px rgba(28,61,51,.07); }
+.occasion-shortcuts > div > button > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; color: var(--forest); background: #e7f0ea; }
+.occasion-shortcuts button > div { min-width: 0; display: grid; gap: 1px; }
+.occasion-shortcuts button small { color: #8a9791; font-size: 8px; font-weight: 900; letter-spacing: .05em; }
+.occasion-shortcuts button b { overflow: hidden; color: var(--forest); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.occasion-shortcuts button em { overflow: hidden; color: #87938d; font-size: 9px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.occasion-shortcuts button > svg { color: #9aa59f; }
+
+.decision-overview {
+  width: min(760px, 100%);
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #d8e2dc;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #f7faf7, #eef4f0);
+  box-shadow: 0 12px 32px rgba(31,58,49,.06);
+}
+.decision-overview > header { display: grid; gap: 4px; }
+.decision-overview > header > span { display: inline-flex; align-items: center; gap: 5px; color: #4e7966; font-size: 9px; font-weight: 900; letter-spacing: .13em; }
+.decision-overview > header > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.decision-overview h3 { color: var(--forest); font-family: Georgia,"Songti SC",serif; font-size: 19px; font-weight: 500; }
+.decision-overview > header b { padding: 4px 8px; border-radius: 999px; color: #46745f; background: #dfece4; font-size: 9px; }
+.decision-overview > header p { margin: 0; color: #7f8d87; font-size: 10px; }
+.overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; }
+.overview-grid > button {
+  min-width: 0;
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 5px 8px;
+  padding: 10px;
+  border: 1px solid #dbe4de;
+  border-radius: 13px;
+  color: #6e7d76;
+  background: rgba(255,255,255,.86);
+  text-align: left;
+  transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background-color var(--motion-fast) ease;
+}
+.overview-grid > button:hover,
+.overview-grid > button:focus-visible { border-color: #9eb5a8; background: white; box-shadow: 0 8px 20px rgba(31,58,49,.08); }
+.overview-grid > button > i { grid-row: 1 / 3; align-self: start; color: #a4afa9; font-family: ui-monospace,monospace; font-size: 10px; font-style: normal; font-weight: 800; }
+.overview-grid > button > span { min-width: 0; display: grid; gap: 3px; }
+.overview-grid > button strong { overflow: hidden; color: var(--forest); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.overview-grid > button small { display: flex; align-items: center; gap: 4px; overflow: hidden; color: #7c8983; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.overview-grid > button em { grid-column: 2; padding: 3px 6px; justify-self: start; border-radius: 999px; color: #8a4a3c; background: #f8e7e1; font-size: 8px; font-style: normal; font-weight: 800; }
+.overview-grid > button > b { grid-column: 3; grid-row: 1; color: var(--forest); font-size: 13px; font-variant-numeric: tabular-nums; }
+.overview-grid > button > svg { grid-column: 3; grid-row: 2; justify-self: end; color: #94a39c; }
+
+.recommendation-card { scroll-margin-top: 96px; }
+.rec-add-primary.added { background: #36785a; box-shadow: 0 8px 18px rgba(54,120,90,.19); }
+
+@media (max-width: 900px) {
+  .launch-grid { grid-template-columns: 1fr; }
+  .occasion-shortcuts > div { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .overview-grid { grid-template-columns: 1fr; }
+  .overview-grid > button { min-height: 66px; }
+}
+
+@media (max-width: 620px) {
+  .blindbox-launchpad { gap: 11px; padding: 0 0 20px; }
+  .meal-context-bar { min-height: 42px; }
+  .meal-context-bar > span small,
+  .meal-context-bar > div span:first-child { display: none; }
+  .meal-context-bar > div span { min-height: 30px; }
+  .launch-grid { gap: 13px; padding: 14px; border-radius: 19px; }
+  .launch-story { display: grid; grid-template-columns: 88px minmax(0,1fr); align-items: center; gap: 9px; }
+  .launch-story .launch-visual { width: 88px; height: 88px; transform: none; }
+  .launch-story .visual-ring.outer { width: 84px; height: 58px; }
+  .launch-story .visual-ring.inner { width: 69px; height: 76px; }
+  .launch-story .blindbox-orbit { width: 50px; height: 50px; box-shadow: 0 9px 22px rgba(23,63,54,.18), 0 0 0 6px rgba(231,239,234,.78); }
+  .launch-story .blindbox-orbit svg { width: 23px; height: 23px; }
+  .launch-story .visual-note { display: none; }
+  .launch-story h2 { font-size: 27px; }
+  .launch-story .blindbox-copy { margin-top: 7px; font-size: 11px; line-height: 1.55; }
+  .launch-actions .appetite-entry { min-height: 58px; }
+  .occasion-shortcuts { padding: 12px; }
+  .occasion-shortcuts > header { justify-content: space-between; }
+  .occasion-shortcuts > header h3 { font-size: 16px; }
+  .occasion-shortcuts > div { gap: 7px; }
+  .occasion-shortcuts > div > button { min-height: 86px; grid-template-columns: auto minmax(0,1fr); }
+  .occasion-shortcuts button > svg { display: none; }
+  .decision-overview { padding: 12px; border-radius: 16px; }
+  .decision-overview > header p { display: none; }
+}
