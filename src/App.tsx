@@ -186,6 +186,8 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   const [orderNote, setOrderNote] = useState('');
   const [diningRoomOpen, setDiningRoomOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [toastUndo, setToastUndo] = useState<(() => Promise<void>) | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -325,25 +327,28 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
 
   const createOrder = async () => {
     const address = deliveryAddress.trim();
-    if (!address) {
-      showToast('请先填写配送地址');
-      return;
-    }
+    if (!address) throw new Error('请先填写配送地址');
+    setIsCreatingOrder(true);
     try {
       const order = await api.createOrder(cart, address, orderNote.trim());
       localStorage.setItem(`linxiaodai:address:${user.id}`, address);
       setCart([]); setOrders(previous => [order, ...previous]); setActivePanel('orders');
       setOrderNote('');
       showToast('订单已创建，请完成演示支付');
-    } catch (error) { showToast(error instanceof Error ? error.message : '下单失败'); }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '下单失败');
+      throw error;
+    } finally { setIsCreatingOrder(false); }
   };
 
   const updateOrder = async (id: string, action: 'pay' | 'cancel') => {
+    setBusyOrderId(id);
     try {
       const updated = action === 'pay' ? await api.payOrder(id) : await api.cancelOrder(id);
       setOrders(previous => previous.map(order => order.id === id ? updated : order));
       showToast(action === 'pay' ? '演示支付完成，履约进度将自动更新' : '订单已取消');
     } catch (error) { showToast(error instanceof Error ? error.message : '订单操作失败'); }
+    finally { setBusyOrderId(null); }
   };
 
   const saveReflection = async (id: string, mood: MealMood, tags: TasteTag[], note: string) => {
@@ -376,8 +381,8 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
       <div className="panel-tabs"><button className={activePanel === 'requirements' ? 'active' : ''} onClick={() => setActivePanel('requirements')}><Sparkles size={16} />偏好</button><button className={activePanel === 'saved' ? 'active' : ''} onClick={() => setActivePanel('saved')}><Bookmark size={16} />收藏{savedMeals.length > 0 && <b>{savedMeals.length}</b>}</button><button className={activePanel === 'cart' ? 'active' : ''} onClick={() => setActivePanel('cart')}><ShoppingCart size={16} />购物车{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.quantity, 0)}</b>}</button><button className={activePanel === 'orders' ? 'active' : ''} onClick={() => setActivePanel('orders')}><PackageCheck size={16} />订单{activeOrderCount > 0 && <b>{activeOrderCount}</b>}</button></div>
       {activePanel === 'requirements' && <DecisionPanel requirements={requirements} providers={providers} />}
       {activePanel === 'saved' && <SavedMealsPanel items={savedMeals} onReorder={reorderSavedMeal} onUpdate={async (id, patch) => { try { const updated = await api.updateSavedMeal(id, patch); setSavedMeals(previous => previous.map(item => item.id === id ? updated : item)); } catch (error) { showToast(error instanceof Error ? error.message : '收藏更新失败，请重试'); } }} onDelete={async id => { const removed = savedMeals.find(item => item.id === id); if (!removed) return; try { await api.deleteSavedMeal(id); setSavedMeals(previous => previous.filter(item => item.id !== id)); showToastWithUndo('已移出收藏夹', async () => { const restored = await api.updateSavedMeal(id, { restore: true }); setSavedMeals(previous => [restored, ...previous.filter(item => item.id !== restored.id)]); }); } catch (error) { showToast(error instanceof Error ? error.message : '删除失败，请检查网络后重试'); } }} />}
-      {activePanel === 'cart' && <CartPanel items={cart} address={deliveryAddress} note={orderNote} onAddressChange={setDeliveryAddress} onNoteChange={setOrderNote} onQuantityChange={updateCartQuantity} onCheckout={createOrder} />}
-      {activePanel === 'orders' && <OrdersPanel orders={orders} tasteProfile={tasteProfile} tastePassport={tastePassport} weeklyRecap={weeklyRecap} onStartPrompt={prompt => { setIsMobilePanelOpen(false); sendMessage(prompt); }} onExploreCuisine={cuisine => { setIsMobilePanelOpen(false); sendMessage(`今天想解锁味觉护照里的${cuisine}印章，请推荐一餐`); }} onOrderAction={updateOrder} onSaveReflection={saveReflection} />}
+      {activePanel === 'cart' && <CartPanel items={cart} address={deliveryAddress} note={orderNote} isSubmitting={isCreatingOrder} onAddressChange={setDeliveryAddress} onNoteChange={setOrderNote} onQuantityChange={updateCartQuantity} onCheckout={createOrder} />}
+      {activePanel === 'orders' && <OrdersPanel orders={orders} busyOrderId={busyOrderId} tasteProfile={tasteProfile} tastePassport={tastePassport} weeklyRecap={weeklyRecap} onStartPrompt={prompt => { setIsMobilePanelOpen(false); sendMessage(prompt); }} onExploreCuisine={cuisine => { setIsMobilePanelOpen(false); sendMessage(`今天想解锁味觉护照里的${cuisine}印章，请推荐一餐`); }} onOrderAction={updateOrder} onSaveReflection={saveReflection} />}
     </aside>
     {isMobilePanelOpen && <button className="mobile-panel-scrim" aria-label="关闭详情面板" onClick={() => setIsMobilePanelOpen(false)} />}
     <nav className="mobile-nav" aria-label="主要导航"><button className={!isMobilePanelOpen ? 'active' : ''} onClick={() => setIsMobilePanelOpen(false)}><MessageCircle size={20} />对话</button><button className={isMobilePanelOpen && activePanel === 'requirements' ? 'active' : ''} onClick={() => openPanel('requirements')}><SlidersHorizontal size={20} />偏好</button><button className={isMobilePanelOpen && activePanel === 'saved' ? 'active' : ''} onClick={() => openPanel('saved')}><span><Bookmark size={20} />{savedMeals.length > 0 && <b>{savedMeals.length}</b>}</span>收藏</button><button className={isMobilePanelOpen && activePanel === 'cart' ? 'active' : ''} onClick={() => openPanel('cart')}><span><ShoppingCart size={20} />{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.quantity, 0)}</b>}</span>购物车</button><button className={isMobilePanelOpen && activePanel === 'orders' ? 'active' : ''} onClick={() => openPanel('orders')}><span><PackageCheck size={20} />{activeOrderCount > 0 && <b>{activeOrderCount}</b>}</span>订单</button></nav>
@@ -585,23 +590,66 @@ function SavedMealsPanel({ items, onReorder, onUpdate, onDelete }: { items: Save
   return <section className="panel-body saved-meals-panel"><div className="panel-heading"><span>HEARTED MENUS</span><h2>心动收藏夹</h2><p>整套保存，一键找回当时想吃的答案</p></div><div className="saved-filters" aria-label="按场景筛选收藏"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部</button>{(Object.keys(savedOccasionLabels) as SavedMealOccasion[]).map(key => <button className={filter === key ? 'active' : ''} key={key} onClick={() => setFilter(key)}>{savedOccasionLabels[key]}</button>)}</div>{visible.length ? <div className="saved-meal-list">{visible.map(item => <article className={!item.isAvailable ? 'unavailable' : ''} key={item.id}><header><div><small>{savedOccasionLabels[item.occasion]}</small><h3>{item.title}</h3><p>{item.restaurant?.name || '餐厅已下线'}</p></div><button aria-label={`删除${item.title}`} disabled={busyId === item.id} onClick={() => onDelete(item.id)}><Trash2 size={16} /></button></header><p className="saved-menu-items">{item.menuItems.map(menu => menu.name).join('、') || '菜品信息暂不可用'}</p>{item.reason && <p className="saved-reason">“{item.reason}”</p>}<div className="saved-price"><strong>当前 ¥{item.currentTotal}</strong>{item.priceChanged && <span>收藏时 ¥{item.snapshotTotal}</span>}<b className={item.isAvailable ? 'ready' : 'paused'}>{item.isAvailable ? '可整套回购' : `${item.unavailableCount} 项暂不可用`}</b></div><label>适合什么时刻<select aria-label={`${item.title}的收藏场景`} value={item.occasion} disabled={busyId === item.id} onChange={event => update(item.id, { occasion: event.target.value as SavedMealOccasion })}>{(Object.keys(savedOccasionLabels) as SavedMealOccasion[]).map(key => <option value={key} key={key}>{savedOccasionLabels[key]}</option>)}</select></label><footer><button className="saved-reorder" disabled={!item.isAvailable} onClick={() => onReorder(item)}><ShoppingCart size={16} />整套加入购物车</button><button className="saved-share" onClick={() => share(item)}><Share2 size={16} />分享</button></footer></article>)}</div> : <div className="saved-empty"><Bookmark size={28} /><h3>{items.length ? '这个场景还没有收藏' : '把心动的一餐留下来'}</h3><p>{items.length ? '换个场景看看，或者在下一次推荐里收藏整套搭配。' : '在推荐卡点击“收藏整套”，以后加班、奖励自己或朋友聚餐时都能快速找回。'}</p></div>}</section>;
 }
 
-function CartPanel({ items, address, note, onAddressChange, onNoteChange, onQuantityChange, onCheckout }: {
+function CartPanel({ items, address, note, isSubmitting, onAddressChange, onNoteChange, onQuantityChange, onCheckout }: {
   items: CartItem[];
   address: string;
   note: string;
+  isSubmitting: boolean;
   onAddressChange: (value: string) => void;
   onNoteChange: (value: string) => void;
   onQuantityChange: (id: string, quantity: number) => void;
-  onCheckout: () => void;
+  onCheckout: () => Promise<void>;
 }) {
+  const [step, setStep] = useState<'edit' | 'review'>('edit');
+  const [addressTouched, setAddressTouched] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const addressRef = useRef<HTMLInputElement>(null);
   const subtotal = items.reduce((sum, line) => sum + line.menuItem.price * line.quantity, 0);
   const deliveryFee = items[0]?.restaurant.deliveryFee || 0;
   const minOrderGap = Math.max(0, (items[0]?.restaurant.minOrderAmount || 0) - subtotal);
-  return <section className="panel-body cart-panel"><div className="panel-heading"><span>YOUR CART</span><h2>购物车</h2></div>{items.length ? <><p className="cart-restaurant"><Store size={15} />{items[0].restaurant.name}<small>起送 ¥{items[0].restaurant.minOrderAmount}</small></p><div className="cart-list">{items.map(line => <div className="cart-row" key={line.id}><div><strong>{line.menuItem.name}</strong><span>¥{line.menuItem.price} / 份</span></div><div className="stepper"><button aria-label={`减少${line.menuItem.name}`} onClick={() => onQuantityChange(line.id, line.quantity - 1)}>−</button><b>{line.quantity}</b><button aria-label={`增加${line.menuItem.name}`} onClick={() => onQuantityChange(line.id, line.quantity + 1)}>+</button></div></div>)}</div><div className="delivery-form"><label>配送地址<input value={address} maxLength={255} placeholder="例如：国贸三期 B 座 1208" onChange={event => onAddressChange(event.target.value)} /></label><label>订单备注（选填）<textarea value={note} maxLength={300} rows={2} placeholder="例如：少盐，放前台即可" onChange={event => onNoteChange(event.target.value)} /></label></div><div className="checkout-box"><span><i>菜品小计</i><b>¥{subtotal.toFixed(2)}</b></span><span><i>配送费</i><b>¥{deliveryFee.toFixed(2)}</b></span><strong><i>合计</i><b>¥{(subtotal + deliveryFee).toFixed(2)}</b></strong>{minOrderGap > 0 && <p className="checkout-warning">还差 ¥{minOrderGap.toFixed(2)} 起送</p>}<button className="primary-button" disabled={minOrderGap > 0 || !address.trim()} onClick={onCheckout}>确认下单<span>→</span></button></div></> : <EmptyState title="购物车还是空的" description="从小呆推荐的菜单中选一份喜欢的吧。" />}</section>;
+  const total = subtotal + deliveryFee;
+  useEffect(() => { if (!items.length) { setStep('edit'); setSubmitError(''); } }, [items.length]);
+  const reviewOrder = (event: FormEvent) => {
+    event.preventDefault();
+    setAddressTouched(true); setSubmitError('');
+    if (!address.trim()) { addressRef.current?.focus(); return; }
+    if (minOrderGap > 0) return;
+    setStep('review');
+  };
+  const placeOrder = async () => {
+    if (isSubmitting) return;
+    setSubmitError('');
+    try { await onCheckout(); }
+    catch (reason) { setSubmitError(reason instanceof Error ? `${reason.message}，请检查后重试。` : '订单没有提交成功，请稍后重试。'); }
+  };
+  if (!items.length) return <section className="panel-body cart-panel"><div className="panel-heading"><span>YOUR CART</span><h2>购物车</h2></div><EmptyState title="购物车还是空的" description="从小呆推荐的商品中选一份喜欢的吧。" /></section>;
+  return <section className="panel-body cart-panel">
+    <div className="checkout-steps" aria-label="结算进度"><span className={step === 'edit' ? 'active' : 'done'}><i>{step === 'review' ? <CheckCircle2 size={13} /> : '1'}</i>编辑订单</span><b /><span className={step === 'review' ? 'active' : ''}><i>2</i>核对提交</span></div>
+    {step === 'edit' ? <form onSubmit={reviewOrder} noValidate>
+      <div className="panel-heading"><span>YOUR CART</span><h2>这一单吃什么</h2><p>先确认商品和送达信息，下步再提交</p></div>
+      <p className="cart-restaurant"><Store size={15} />{items[0].restaurant.name}<small>起送 ¥{items[0].restaurant.minOrderAmount}</small></p>
+      <div className="cart-list">{items.map(line => <div className="cart-row" key={line.id}><div><strong>{line.menuItem.name}</strong><span>¥{formatMoney(line.menuItem.price * line.quantity)} · {line.menuItem.category}</span></div><div className="stepper" aria-label={`${line.menuItem.name}数量`}><button type="button" aria-label={`减少${line.menuItem.name}`} onClick={() => onQuantityChange(line.id, line.quantity - 1)}>−</button><b>{line.quantity}</b><button type="button" aria-label={`增加${line.menuItem.name}`} onClick={() => onQuantityChange(line.id, line.quantity + 1)}>+</button></div></div>)}</div>
+      <div className="delivery-form"><label htmlFor="delivery-address"><span>配送地址 <b>必填</b></span><input ref={addressRef} id="delivery-address" value={address} maxLength={255} autoComplete="street-address" aria-invalid={addressTouched && !address.trim()} aria-describedby="delivery-address-help" placeholder="例如：国贸三期 B 座 1208" onBlur={() => setAddressTouched(true)} onChange={event => { onAddressChange(event.target.value); setSubmitError(''); }} /></label><small id="delivery-address-help" className={addressTouched && !address.trim() ? 'field-error' : 'field-help'}>{addressTouched && !address.trim() ? '请填写详细地址，包含楼栋和房间号。' : '常用地址会保存在当前设备，下次可以直接使用。'}</small><label htmlFor="order-note"><span>订单备注 <small>选填</small></span><textarea id="order-note" value={note} maxLength={300} rows={2} placeholder="例如：少盐，放前台即可" onChange={event => onNoteChange(event.target.value)} /></label></div>
+      <div className="checkout-box"><span><i>商品小计</i><b>¥{formatMoney(subtotal)}</b></span><span><i>配送费</i><b>¥{formatMoney(deliveryFee)}</b></span><strong><i>预计合计</i><b>¥{formatMoney(total)}</b></strong>{minOrderGap > 0 && <p className="checkout-warning" role="alert">还差 ¥{formatMoney(minOrderGap)} 起送，可返回推荐继续加购。</p>}<button className="primary-button checkout-primary" type="submit" disabled={minOrderGap > 0}>核对订单 <span>¥{formatMoney(total)} →</span></button><small className="checkout-safe"><LockKeyhole size={13} />下一步不会直接扣款</small></div>
+    </form> : <div className="checkout-review" aria-live="polite">
+      <button className="checkout-back" type="button" disabled={isSubmitting} onClick={() => { setStep('edit'); setSubmitError(''); }}><ArrowLeft size={16} />返回修改</button>
+      <div className="panel-heading"><span>FINAL CHECK</span><h2>核对后再提交</h2><p>价格、地址和履约方式都确认无误</p></div>
+      <div className="review-hero"><CheckCircle2 size={22} /><div><strong>{items[0].restaurant.name}</strong><span>{items.reduce((sum, item) => sum + item.quantity, 0)} 份商品 · 预计 {items[0].restaurant.avgDeliveryTime} 分钟</span></div></div>
+      <div className="review-section"><span>商品明细</span>{items.map(line => <div key={line.id}><p>{line.menuItem.name}<small>× {line.quantity}</small></p><b>¥{formatMoney(line.menuItem.price * line.quantity)}</b></div>)}</div>
+      <div className="review-section"><span>送达信息</span><div><p>{address}<small>{note.trim() ? `备注：${note.trim()}` : '无订单备注'}</small></p></div></div>
+      <div className="review-total"><span>预计支付</span><strong>¥{formatMoney(total)}</strong><small>商品 ¥{formatMoney(subtotal)} + 配送 ¥{formatMoney(deliveryFee)}</small></div>
+      <div className="demo-payment-note"><LockKeyhole size={16} /><span><b>演示环境，不会真实扣款</b><small>提交后可完整体验支付、制作和配送进度。</small></span></div>
+      {submitError && <p className="checkout-submit-error" role="alert">{submitError}</p>}
+      <button className="primary-button checkout-submit" type="button" disabled={isSubmitting} onClick={placeOrder}>{isSubmitting ? <><i className="button-spinner" />正在提交订单…</> : <><CreditCard size={17} />确认提交 <span>¥{formatMoney(total)}</span></>}</button>
+    </div>}
+  </section>;
 }
 
-function OrdersPanel({ orders, tasteProfile, tastePassport, weeklyRecap, onStartPrompt, onExploreCuisine, onOrderAction, onSaveReflection }: { orders: Order[]; tasteProfile: TasteProfile | null; tastePassport: TastePassport | null; weeklyRecap: WeeklyTasteRecap | null; onStartPrompt: (prompt: string) => void; onExploreCuisine: (cuisine: string) => void; onOrderAction: (id: string, action: 'pay' | 'cancel') => void; onSaveReflection: (id: string, mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
-  return <section className="panel-body order-panel"><div className="panel-heading"><span>ORDERS & TASTE</span><h2>我的订单</h2><p>每次回味，都会让下一次推荐更懂你</p></div>{weeklyRecap && <WeeklyRecapEntry recap={weeklyRecap} onStartPrompt={onStartPrompt} />}{tastePassport && <TastePassportCard passport={tastePassport} onExplore={onExploreCuisine} />}{tasteProfile && <TasteProfileCard profile={tasteProfile} />}{orders.length ? orders.map(order => <OrderCard key={order.id} order={order} action={onOrderAction} onSaveReflection={onSaveReflection} />) : <EmptyState title="还没有订单" description="选好菜品后，会在这里看到订单进度。" />}</section>;
+function OrdersPanel({ orders, busyOrderId, tasteProfile, tastePassport, weeklyRecap, onStartPrompt, onExploreCuisine, onOrderAction, onSaveReflection }: { orders: Order[]; busyOrderId: string | null; tasteProfile: TasteProfile | null; tastePassport: TastePassport | null; weeklyRecap: WeeklyTasteRecap | null; onStartPrompt: (prompt: string) => void; onExploreCuisine: (cuisine: string) => void; onOrderAction: (id: string, action: 'pay' | 'cancel') => void; onSaveReflection: (id: string, mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
+  const activeOrders = orders.filter(order => !['completed', 'cancelled'].includes(order.status));
+  const [filter, setFilter] = useState<'active' | 'all'>(() => activeOrders.length ? 'active' : 'all');
+  const visibleOrders = filter === 'active' ? activeOrders : orders;
+  return <section className="panel-body order-panel"><div className="panel-heading"><span>ORDER JOURNEY</span><h2>订单与配送</h2><p>先看正在发生的事，再回顾已经吃过的味道</p></div><div className="order-filters" aria-label="筛选订单"><button className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>进行中 <span>{activeOrders.length}</span></button><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部订单 <span>{orders.length}</span></button></div>{visibleOrders.length ? <div className="order-list">{visibleOrders.map(order => <OrderCard key={order.id} order={order} busy={busyOrderId === order.id} action={onOrderAction} onSaveReflection={onSaveReflection} />)}</div> : filter === 'active' && orders.length ? <div className="orders-caught-up"><CheckCircle2 size={25} /><h3>当前没有进行中的订单</h3><p>已完成和已取消的记录都还在。</p><button onClick={() => setFilter('all')}>查看全部订单</button></div> : <EmptyState title="还没有订单" description="选好商品后，会在这里看到支付与配送进度。" />}<div className="order-insights"><div className="order-insights-heading"><span>TASTE ARCHIVE</span><h3>吃过之后，也值得记住</h3></div>{weeklyRecap && <WeeklyRecapEntry recap={weeklyRecap} onStartPrompt={onStartPrompt} />}{tastePassport && <TastePassportCard passport={tastePassport} onExplore={onExploreCuisine} />}{tasteProfile && <TasteProfileCard profile={tasteProfile} />}</div></section>;
 }
 
 function WeeklyRecapEntry({ recap, onStartPrompt }: { recap: WeeklyTasteRecap; onStartPrompt: (prompt: string) => void }) {
@@ -644,11 +692,28 @@ function TasteProfileCard({ profile }: { profile: TasteProfile }) {
   return <article className="taste-profile-card"><div className="taste-profile-top"><div className="taste-level"><Trophy size={18} /><span>Lv.{profile.level}</span></div><div><small>MY TASTE ARCHIVE</small><h3>{profile.levelName}</h3></div><b>{profile.checkInCount} 次回味</b></div><div className="taste-progress" role="progressbar" aria-label="味觉等级进度" aria-valuemin={0} aria-valuemax={target} aria-valuenow={profile.checkInCount}><span style={{ width: `${progress}%` }} /></div><p>{profile.nextLevelAt ? `再记录 ${profile.nextLevelAt - profile.checkInCount} 餐，解锁下一等级` : '你已经是很懂生活的味觉玩家'}</p>{(profile.favoriteCuisines.length > 0 || profile.topTags.length > 0) && <div className="taste-profile-tags">{profile.favoriteCuisines.slice(0, 3).map(cuisine => <span key={cuisine}>偏爱 · {cuisine}</span>)}{profile.topTags.slice(0, 2).map(tag => <span key={tag}>{tagLabels[tag]}</span>)}</div>}</article>;
 }
 
-function OrderCard({ order, action, onSaveReflection }: { order: Order; action: (id: string, action: 'pay' | 'cancel') => void; onSaveReflection: (id: string, mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
+function OrderCard({ order, busy, action, onSaveReflection }: { order: Order; busy: boolean; action: (id: string, action: 'pay' | 'cancel') => void; onSaveReflection: (id: string, mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
   const [reflectionOpen, setReflectionOpen] = useState(false);
-  const progressStatuses = ['paid', 'accepted', 'preparing', 'ready_for_pickup', 'picked_up', 'delivering', 'completed'];
-  const progressIndex = progressStatuses.indexOf(order.status);
-  return <div className="order-card"><div className="order-card-heading"><div><h3>{order.restaurantName}</h3><span>#{order.id.slice(0, 8)} · {new Date(order.createdAt).toLocaleString('zh-CN')}</span></div><b>¥{order.total}</b></div><p>{order.items.map(item => `${item.name} x${item.quantity}`).join('，')}</p><div className={`fulfillment-source ${order.fulfillment.isLive ? 'live' : 'demo'}`}><PackageCheck size={17} /><span><b>{order.fulfillment.providerName} · {order.fulfillment.isLive ? '实时履约' : '演示履约'}</b><small>{order.fulfillment.notice}</small></span>{order.fulfillment.trackingUrl && <a href={order.fulfillment.trackingUrl} target="_blank" rel="noreferrer">查看骑手位置</a>}</div><div className={`order-status ${order.status}`}><Clock3 size={16} /><strong>{statusLabel[order.status]}</strong>{!['completed', 'cancelled'].includes(order.status) && <span>预计 {order.estimatedDeliveryTime} 分钟</span>}</div>{progressIndex >= 0 && <div className="order-progress" aria-label="订单进度">{progressStatuses.map((status, index) => <span className={index <= progressIndex ? 'done' : ''} key={status} title={statusLabel[status]} />)}</div>}{order.address && <p className="order-address">送至：{order.address}</p>}{order.events?.length ? <details className="order-events"><summary>查看进度记录（{order.events.length}）</summary>{order.events.slice().reverse().map((event, index) => <div key={`${event.createdAt}-${index}`}><span>{new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span><p>{event.note || statusLabel[event.status]}</p></div>)}</details> : null}{order.status === 'pending_payment' && <div className="order-actions"><button className="primary-button compact" onClick={() => action(order.id, 'pay')}><CreditCard size={16} />演示支付</button><button className="outline-button" onClick={() => action(order.id, 'cancel')}>取消</button></div>}{order.status === 'completed' && <button className={`reflection-entry ${order.reflection ? 'recorded' : ''}`} onClick={() => setReflectionOpen(true)}>{order.reflection ? <><Heart size={17} fill="currentColor" /><span><b>这餐已收入味觉档案</b><small>点击可以更新你的回味</small></span></> : <><UtensilsCrossed size={17} /><span><b>这一餐，后来感觉怎么样？</b><small>15 秒留下回味 · 下一次推荐会更准</small></span></>}<i>→</i></button>}{reflectionOpen && <MealReflectionDialog order={order} onClose={() => setReflectionOpen(false)} onSave={async (mood, tags, note) => { await onSaveReflection(order.id, mood, tags, note); setReflectionOpen(false); }} />}</div>;
+  const [cancelConfirming, setCancelConfirming] = useState(false);
+  const stageLabels = ['已支付', '渠道确认', '准备中', '配送中', '已送达'];
+  const stageIndexByStatus: Record<string, number> = { paid: 0, accepted: 1, preparing: 2, ready_for_pickup: 2, picked_up: 3, delivering: 3, completed: 4 };
+  const progressIndex = stageIndexByStatus[order.status] ?? -1;
+  const latestEvent = order.events?.[order.events.length - 1];
+  const isTerminal = ['completed', 'cancelled'].includes(order.status);
+  const statusMessage = latestEvent?.note || (order.status === 'pending_payment' ? '提交支付后，渠道才会开始处理订单' : statusLabel[order.status]);
+  return <article className={`order-card ${isTerminal ? 'terminal' : 'active-order'}`}>
+    <header className="order-card-heading"><div><span className={`order-state-pill ${order.status}`}><i />{statusLabel[order.status]}</span><h3>{order.restaurantName}</h3><small>订单 #{order.id.slice(0, 8)} · {new Date(order.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></div><b>¥{formatMoney(order.total)}</b></header>
+    {!isTerminal && <div className="order-now"><div><Clock3 size={19} /></div><span><small>{order.status === 'pending_payment' ? '等待支付' : '预计送达'}</small><strong>{order.status === 'pending_payment' ? '完成支付后开始履约' : `约 ${order.estimatedDeliveryTime} 分钟`}</strong><p>{statusMessage}</p></span></div>}
+    <div className="order-line-items">{order.items.map(item => <div key={item.id}><span>{item.name}<small>× {item.quantity}</small></span><b>¥{formatMoney(item.price * item.quantity)}</b></div>)}</div>
+    {progressIndex >= 0 && <ol className="delivery-journey" role="progressbar" aria-label={`订单进度：${stageLabels[progressIndex]}`} aria-valuemin={1} aria-valuenow={progressIndex + 1} aria-valuemax={stageLabels.length}>{stageLabels.map((label, index) => <li className={index < progressIndex ? 'done' : index === progressIndex ? 'current' : ''} key={label}><i>{index <= progressIndex ? <CheckCircle2 size={14} /> : index + 1}</i><span>{label}</span></li>)}</ol>}
+    <div className={`fulfillment-source ${order.fulfillment.isLive ? 'live' : 'demo'}`}><PackageCheck size={17} /><span><b>{order.fulfillment.providerName} · {order.fulfillment.isLive ? '实时履约' : '演示履约'}</b><small>{order.fulfillment.notice}</small></span>{order.fulfillment.trackingUrl && <a href={order.fulfillment.trackingUrl} target="_blank" rel="noreferrer">查看骑手位置</a>}</div>
+    {order.address && <div className="order-address"><Store size={15} /><span><small>送达地址</small>{order.address}</span></div>}
+    {order.events?.length ? <details className="order-events"><summary>查看完整进度（{order.events.length} 条）</summary>{order.events.slice().reverse().map((event, index) => <div key={`${event.createdAt}-${index}`}><span>{new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span><p>{event.note || statusLabel[event.status]}</p></div>)}</details> : null}
+    {order.status === 'pending_payment' && !cancelConfirming && <div className="payment-actions"><div><CreditCard size={17} /><span><b>演示支付 ¥{formatMoney(order.total)}</b><small>不会调用真实支付，也不会扣款</small></span></div><button className="primary-button compact" disabled={busy} onClick={() => action(order.id, 'pay')}>{busy ? <><i className="button-spinner" />处理中…</> : '立即支付'}</button><button className="order-cancel" disabled={busy} onClick={() => setCancelConfirming(true)}>取消订单</button></div>}
+    {order.status === 'pending_payment' && cancelConfirming && <div className="cancel-confirmation" role="alert"><div><b>确定取消这笔订单吗？</b><span>取消后需要重新选择商品并提交。</span></div><button disabled={busy} onClick={() => setCancelConfirming(false)}>保留订单</button><button className="confirm-cancel" disabled={busy} onClick={() => action(order.id, 'cancel')}>{busy ? '取消中…' : '确定取消'}</button></div>}
+    {order.status === 'completed' && <button className={`reflection-entry ${order.reflection ? 'recorded' : ''}`} onClick={() => setReflectionOpen(true)}>{order.reflection ? <><Heart size={17} fill="currentColor" /><span><b>这餐已收入味觉档案</b><small>点击可以更新你的回味</small></span></> : <><UtensilsCrossed size={17} /><span><b>这一餐，后来感觉怎么样？</b><small>15 秒留下回味 · 下一次推荐会更准</small></span></>}<i>→</i></button>}
+    {reflectionOpen && <MealReflectionDialog order={order} onClose={() => setReflectionOpen(false)} onSave={async (mood, tags, note) => { await onSaveReflection(order.id, mood, tags, note); setReflectionOpen(false); }} />}
+  </article>;
 }
 
 function MealReflectionDialog({ order, onClose, onSave }: { order: Order; onClose: () => void; onSave: (mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
