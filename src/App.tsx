@@ -8,6 +8,7 @@ import {
   ChefHat,
   CheckCircle2,
   ChevronDown,
+  CircleAlert,
   Clock3,
   Compass,
   Copy,
@@ -29,6 +30,7 @@ import {
   MessageCircle,
   Meh,
   PackageCheck,
+  RefreshCw,
   RotateCcw,
   Smile,
   Salad,
@@ -55,6 +57,7 @@ import { api } from './api';
 import type {
   CartItem,
   ChatMessage,
+  CheckoutQuote,
   ConversationSummary,
   DiningRoom,
   ExtractedRequirements,
@@ -361,18 +364,17 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     } catch { showToast('反馈暂未保存，请稍后重试。'); }
   };
 
-  const createOrder = async () => {
+  const createOrder = async (checkoutItems: CartItem[]) => {
     const address = deliveryAddress.trim();
     if (!address) throw new Error('请先填写配送地址');
     setIsCreatingOrder(true);
     try {
-      const order = await api.createOrder(cart, address, orderNote.trim());
+      const order = await api.createOrder(checkoutItems, address, orderNote.trim());
       rememberDeliveryAddress(address);
       setCart([]); setOrders(previous => [order, ...previous]); setActivePanel('orders');
       setOrderNote('');
       showToast('订单已创建，请完成演示支付');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '下单失败');
       throw error;
     } finally { setIsCreatingOrder(false); }
   };
@@ -401,6 +403,17 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
       showToast(`${preview.notice}${unavailable}${adjusted}${price}${delivery}`);
     } catch (error) { showToast(error instanceof Error ? error.message : '复购检查失败，请稍后重试'); }
     finally { setBusyOrderId(null); }
+  };
+
+  const applyCheckoutQuote = (quote: CheckoutQuote) => {
+    if (!quote.restaurant || !quote.items.length) return;
+    setCart(previous => quote.items.map(line => ({
+      id: previous.find(item => item.menuItem.id === line.menuItem.id)?.id || crypto.randomUUID(),
+      menuItem: line.menuItem,
+      restaurant: quote.restaurant!,
+      quantity: line.quantity,
+    })));
+    showToast('购物车已按当前价格与库存更新');
   };
 
   const saveReflection = async (id: string, mood: MealMood, tags: TasteTag[], note: string) => {
@@ -433,7 +446,7 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
       <div className="panel-tabs"><button className={activePanel === 'requirements' ? 'active' : ''} onClick={() => setActivePanel('requirements')}><Sparkles size={16} />偏好</button><button className={activePanel === 'saved' ? 'active' : ''} onClick={() => setActivePanel('saved')}><Bookmark size={16} />收藏{savedMeals.length > 0 && <b>{savedMeals.length}</b>}</button><button className={activePanel === 'cart' ? 'active' : ''} onClick={() => setActivePanel('cart')}><ShoppingCart size={16} />购物车{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.quantity, 0)}</b>}</button><button className={activePanel === 'orders' ? 'active' : ''} onClick={() => setActivePanel('orders')}><PackageCheck size={16} />订单{activeOrderCount > 0 && <b>{activeOrderCount}</b>}</button></div>
       {activePanel === 'requirements' && <DecisionPanel requirements={requirements} providers={providers} />}
       {activePanel === 'saved' && <SavedMealsPanel items={savedMeals} onReorder={reorderSavedMeal} onUpdate={async (id, patch) => { try { const updated = await api.updateSavedMeal(id, patch); setSavedMeals(previous => previous.map(item => item.id === id ? updated : item)); } catch (error) { showToast(error instanceof Error ? error.message : '收藏更新失败，请重试'); } }} onDelete={async id => { const removed = savedMeals.find(item => item.id === id); if (!removed) return; try { await api.deleteSavedMeal(id); setSavedMeals(previous => previous.filter(item => item.id !== id)); showToastWithUndo('已移出收藏夹', async () => { const restored = await api.updateSavedMeal(id, { restore: true }); setSavedMeals(previous => [restored, ...previous.filter(item => item.id !== restored.id)]); }); } catch (error) { showToast(error instanceof Error ? error.message : '删除失败，请检查网络后重试'); } }} />}
-      {activePanel === 'cart' && <CartPanel items={cart} address={deliveryAddress} note={orderNote} isSubmitting={isCreatingOrder} onAddressChange={setDeliveryAddress} onNoteChange={setOrderNote} onQuantityChange={updateCartQuantity} onCheckout={createOrder} />}
+      {activePanel === 'cart' && <CartPanel items={cart} address={deliveryAddress} note={orderNote} isSubmitting={isCreatingOrder} onAddressChange={setDeliveryAddress} onNoteChange={setOrderNote} onQuantityChange={updateCartQuantity} onQuote={() => api.checkoutQuote(cart)} onApplyQuote={applyCheckoutQuote} onFindAlternatives={() => { setIsMobilePanelOpen(false); sendMessage(`当前购物车里的商品状态有变化，请按相近预算推荐一份可以立即下单的替代餐`); }} onCheckout={createOrder} />}
       {activePanel === 'orders' && <OrdersPanel orders={orders} busyOrderId={busyOrderId} hasCartItems={cart.length > 0} tasteProfile={tasteProfile} tastePassport={tastePassport} weeklyRecap={weeklyRecap} onStartPrompt={prompt => { setIsMobilePanelOpen(false); sendMessage(prompt); }} onExploreCuisine={cuisine => { setIsMobilePanelOpen(false); sendMessage(`今天想解锁味觉护照里的${cuisine}印章，请推荐一餐`); }} onOrderAction={updateOrder} onReorder={reorderOrder} onSaveReflection={saveReflection} />}
     </aside>
     {isMobilePanelOpen && <button className="mobile-panel-scrim" aria-label="关闭详情面板" onClick={() => setIsMobilePanelOpen(false)} />}
@@ -710,7 +723,7 @@ function SavedMealsPanel({ items, onReorder, onUpdate, onDelete }: { items: Save
   return <section className="panel-body saved-meals-panel"><div className="panel-heading"><span>HEARTED MENUS</span><h2>心动收藏夹</h2><p>整套保存，一键找回当时想吃的答案</p></div><div className="saved-filters" aria-label="按场景筛选收藏"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部</button>{(Object.keys(savedOccasionLabels) as SavedMealOccasion[]).map(key => <button className={filter === key ? 'active' : ''} key={key} onClick={() => setFilter(key)}>{savedOccasionLabels[key]}</button>)}</div>{visible.length ? <div className="saved-meal-list">{visible.map(item => <article className={!item.isAvailable ? 'unavailable' : ''} key={item.id}><header><div><small>{savedOccasionLabels[item.occasion]}</small><h3>{item.title}</h3><p>{item.restaurant?.name || '餐厅已下线'}</p></div><button aria-label={`删除${item.title}`} disabled={busyId === item.id} onClick={() => onDelete(item.id)}><Trash2 size={16} /></button></header><p className="saved-menu-items">{item.menuItems.map(menu => menu.name).join('、') || '菜品信息暂不可用'}</p>{item.reason && <p className="saved-reason">“{item.reason}”</p>}<div className="saved-price"><strong>当前 ¥{item.currentTotal}</strong>{item.priceChanged && <span>收藏时 ¥{item.snapshotTotal}</span>}<b className={item.isAvailable ? 'ready' : 'paused'}>{item.isAvailable ? '可整套回购' : `${item.unavailableCount} 项暂不可用`}</b></div><label>适合什么时刻<select aria-label={`${item.title}的收藏场景`} value={item.occasion} disabled={busyId === item.id} onChange={event => update(item.id, { occasion: event.target.value as SavedMealOccasion })}>{(Object.keys(savedOccasionLabels) as SavedMealOccasion[]).map(key => <option value={key} key={key}>{savedOccasionLabels[key]}</option>)}</select></label><footer><button className="saved-reorder" disabled={!item.isAvailable} onClick={() => onReorder(item)}><ShoppingCart size={16} />整套加入购物车</button><button className="saved-share" onClick={() => share(item)}><Share2 size={16} />分享</button></footer></article>)}</div> : <div className="saved-empty"><Bookmark size={28} /><h3>{items.length ? '这个场景还没有收藏' : '把心动的一餐留下来'}</h3><p>{items.length ? '换个场景看看，或者在下一次推荐里收藏整套搭配。' : '在推荐卡点击“收藏整套”，以后加班、奖励自己或朋友聚餐时都能快速找回。'}</p></div>}</section>;
 }
 
-function CartPanel({ items, address, note, isSubmitting, onAddressChange, onNoteChange, onQuantityChange, onCheckout }: {
+function CartPanel({ items, address, note, isSubmitting, onAddressChange, onNoteChange, onQuantityChange, onQuote, onApplyQuote, onFindAlternatives, onCheckout }: {
   items: CartItem[];
   address: string;
   note: string;
@@ -718,29 +731,51 @@ function CartPanel({ items, address, note, isSubmitting, onAddressChange, onNote
   onAddressChange: (value: string) => void;
   onNoteChange: (value: string) => void;
   onQuantityChange: (id: string, quantity: number) => void;
-  onCheckout: () => Promise<void>;
+  onQuote: () => Promise<CheckoutQuote>;
+  onApplyQuote: (quote: CheckoutQuote) => void;
+  onFindAlternatives: () => void;
+  onCheckout: (items: CartItem[]) => Promise<void>;
 }) {
   const [step, setStep] = useState<'edit' | 'review'>('edit');
   const [addressTouched, setAddressTouched] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [quote, setQuote] = useState<CheckoutQuote | null>(null);
+  const [isQuoting, setIsQuoting] = useState(false);
   const addressRef = useRef<HTMLInputElement>(null);
   const subtotal = items.reduce((sum, line) => sum + line.menuItem.price * line.quantity, 0);
   const deliveryFee = items[0]?.restaurant.deliveryFee || 0;
   const minOrderGap = Math.max(0, (items[0]?.restaurant.minOrderAmount || 0) - subtotal);
   const total = subtotal + deliveryFee;
-  useEffect(() => { if (!items.length) { setStep('edit'); setSubmitError(''); } }, [items.length]);
-  const reviewOrder = (event: FormEvent) => {
+  const cartSignature = items.map(line => `${line.menuItem.id}:${line.quantity}:${line.menuItem.price}:${line.restaurant.deliveryFee}`).join('|');
+  const quotedItems: CartItem[] = quote?.restaurant ? quote.items.map(line => ({ id: items.find(item => item.menuItem.id === line.menuItem.id)?.id || line.menuItem.id, menuItem: line.menuItem, restaurant: quote.restaurant!, quantity: line.quantity })) : items;
+  const reviewSubtotal = quote?.currentSubtotal ?? subtotal;
+  const reviewDeliveryFee = quote?.deliveryFee ?? deliveryFee;
+  const reviewTotal = quote?.currentTotal ?? total;
+  useEffect(() => { setStep('edit'); setSubmitError(''); setQuote(null); }, [cartSignature]);
+  const reviewOrder = async (event: FormEvent) => {
     event.preventDefault();
-    setAddressTouched(true); setSubmitError('');
+    if (isQuoting) return;
+    setAddressTouched(true); setSubmitError(''); setQuote(null);
     if (!address.trim()) { addressRef.current?.focus(); return; }
     if (minOrderGap > 0) return;
-    setStep('review');
+    setIsQuoting(true);
+    try {
+      const nextQuote = await onQuote();
+      setQuote(nextQuote);
+      if (nextQuote.canCheckout) setStep('review');
+    } catch (reason) {
+      setSubmitError(reason instanceof Error ? `${reason.message}，请稍后重新核对。` : '暂时无法核对价格与库存，请稍后重试。');
+    } finally { setIsQuoting(false); }
   };
   const placeOrder = async () => {
     if (isSubmitting) return;
     setSubmitError('');
-    try { await onCheckout(); }
-    catch (reason) { setSubmitError(reason instanceof Error ? `${reason.message}，请检查后重试。` : '订单没有提交成功，请稍后重试。'); }
+    try { await onCheckout(quotedItems); }
+    catch (reason) {
+      const message = reason instanceof Error ? reason.message : '订单没有提交成功，请稍后重试。';
+      if (message.includes('重新核对') || message.includes('已变化')) { setStep('edit'); setQuote(null); setSubmitError(`${message}，已返回购物车。`); }
+      else setSubmitError(`${message}，请检查后重试。`);
+    }
   };
   if (!items.length) return <section className="panel-body cart-panel"><div className="panel-heading"><span>YOUR CART</span><h2>购物车</h2></div><EmptyState title="购物车还是空的" description="从小呆推荐的商品中选一份喜欢的吧。" /></section>;
   return <section className="panel-body cart-panel">
@@ -750,17 +785,20 @@ function CartPanel({ items, address, note, isSubmitting, onAddressChange, onNote
       <p className="cart-restaurant"><Store size={15} />{items[0].restaurant.name}<small>起送 ¥{items[0].restaurant.minOrderAmount}</small></p>
       <div className="cart-list">{items.map(line => <div className="cart-row" key={line.id}><div><strong>{line.menuItem.name}</strong><span>¥{formatMoney(line.menuItem.price * line.quantity)} · {line.menuItem.category}</span></div><div className="stepper" aria-label={`${line.menuItem.name}数量`}><button type="button" aria-label={`减少${line.menuItem.name}`} onClick={() => onQuantityChange(line.id, line.quantity - 1)}>−</button><b>{line.quantity}</b><button type="button" aria-label={`增加${line.menuItem.name}`} onClick={() => onQuantityChange(line.id, line.quantity + 1)}>+</button></div></div>)}</div>
       <div className="delivery-form"><label htmlFor="delivery-address"><span>配送地址 <b>必填</b></span><input ref={addressRef} id="delivery-address" value={address} maxLength={255} autoComplete="street-address" aria-invalid={addressTouched && !address.trim()} aria-describedby="delivery-address-help" placeholder="例如：国贸三期 B 座 1208" onBlur={() => setAddressTouched(true)} onChange={event => { onAddressChange(event.target.value); setSubmitError(''); }} /></label><small id="delivery-address-help" className={addressTouched && !address.trim() ? 'field-error' : 'field-help'}>{addressTouched && !address.trim() ? '请填写详细地址，包含楼栋和房间号。' : '常用地址会保存在当前设备，下次可以直接使用。'}</small><label htmlFor="order-note"><span>订单备注 <small>选填</small></span><textarea id="order-note" value={note} maxLength={300} rows={2} placeholder="例如：少盐，放前台即可" onChange={event => onNoteChange(event.target.value)} /></label></div>
-      <div className="checkout-box"><span><i>商品小计</i><b>¥{formatMoney(subtotal)}</b></span><span><i>配送费</i><b>¥{formatMoney(deliveryFee)}</b></span><strong><i>预计合计</i><b>¥{formatMoney(total)}</b></strong>{minOrderGap > 0 && <p className="checkout-warning" role="alert">还差 ¥{formatMoney(minOrderGap)} 起送，可返回推荐继续加购。</p>}<button className="primary-button checkout-primary" type="submit" disabled={minOrderGap > 0}>核对订单 <span>¥{formatMoney(total)} →</span></button><small className="checkout-safe"><LockKeyhole size={13} />下一步不会直接扣款</small></div>
+      {quote && !quote.canCheckout && <div className="quote-recovery" role="alert"><CircleAlert size={19} /><div><b>{quote.notice}</b><span>提交前发现商品状态与购物车记录不一致。</span></div>{quote.unavailableItems.length > 0 && <ul>{quote.unavailableItems.map(item => <li key={`${item.name}-${item.reason}`}><span>{item.name}</span><b>{item.reason}</b></li>)}</ul>}{quote.quantityAdjustments.length > 0 && <ul>{quote.quantityAdjustments.map(item => <li key={item.name}><span>{item.name}</span><b>{item.fromQuantity} 份 → {item.toQuantity} 份</b></li>)}</ul>}<div className="quote-recovery-actions">{quote.restaurant && quote.items.length > 0 && <button type="button" onClick={() => { onApplyQuote(quote); setQuote(null); setSubmitError(''); }}>按实时信息更新</button>}<button type="button" className="quote-alternative" onClick={onFindAlternatives}>让小呆换一份</button></div></div>}
+      {submitError && <p className="checkout-submit-error" role="alert">{submitError}</p>}
+      <div className="checkout-box"><span><i>商品小计</i><b>¥{formatMoney(subtotal)}</b></span><span><i>配送费</i><b>¥{formatMoney(deliveryFee)}</b></span><strong><i>预计合计</i><b>¥{formatMoney(total)}</b></strong>{minOrderGap > 0 && <p className="checkout-warning" role="alert">还差 ¥{formatMoney(minOrderGap)} 起送，可返回推荐继续加购。</p>}<button className="primary-button checkout-primary" type="submit" disabled={minOrderGap > 0 || isQuoting}>{isQuoting ? <><i className="button-spinner" />正在核对实时价格…</> : <>核对订单 <span>¥{formatMoney(total)} →</span></>}</button><small className="checkout-safe"><LockKeyhole size={13} />核对价格与库存，不会直接扣款</small></div>
     </form> : <div className="checkout-review" aria-live="polite">
-      <button className="checkout-back" type="button" disabled={isSubmitting} onClick={() => { setStep('edit'); setSubmitError(''); }}><ArrowLeft size={16} />返回修改</button>
-      <div className="panel-heading"><span>FINAL CHECK</span><h2>核对后再提交</h2><p>价格、地址和履约方式都确认无误</p></div>
-      <div className="review-hero"><CheckCircle2 size={22} /><div><strong>{items[0].restaurant.name}</strong><span>{items.reduce((sum, item) => sum + item.quantity, 0)} 份商品 · 预计 {items[0].restaurant.avgDeliveryTime} 分钟</span></div></div>
-      <div className="review-section"><span>商品明细</span>{items.map(line => <div key={line.id}><p>{line.menuItem.name}<small>× {line.quantity}</small></p><b>¥{formatMoney(line.menuItem.price * line.quantity)}</b></div>)}</div>
+      <button className="checkout-back" type="button" disabled={isSubmitting} onClick={() => { setStep('edit'); setSubmitError(''); setQuote(null); }}><ArrowLeft size={16} />返回修改</button>
+      <div className="panel-heading"><span>FINAL CHECK</span><h2>核对后再提交</h2><p>价格、库存、地址和履约方式都确认无误</p></div>
+      <div className="review-hero"><CheckCircle2 size={22} /><div><strong>{quote?.restaurant?.name || items[0].restaurant.name}</strong><span>{quotedItems.reduce((sum, item) => sum + item.quantity, 0)} 份商品 · 预计 {quote?.restaurant?.avgDeliveryTime || items[0].restaurant.avgDeliveryTime} 分钟</span></div></div>
+      {quote && (quote.priceChanged || quote.deliveryFeeChanged) ? <div className="quote-change-note" role="status"><RefreshCw size={18} /><div><b>实时核价发现变化</b><span>以下价格已更新，请确认后再提交。</span></div><ul>{quote.items.filter(item => Math.abs(item.previousPrice - item.currentPrice) >= 0.01).map(item => <li key={item.menuItem.id}><span>{item.menuItem.name}</span><b>¥{formatMoney(item.previousPrice)} → ¥{formatMoney(item.currentPrice)}</b></li>)}{quote.deliveryFeeChanged && <li><span>配送费</span><b>¥{formatMoney(quote.previousDeliveryFee)} → ¥{formatMoney(quote.deliveryFee)}</b></li>}</ul></div> : <div className="quote-verified"><CheckCircle2 size={16} /><span><b>实时价格与库存已确认</b><small>刚刚完成核对，提交时仍会再次校验。</small></span></div>}
+      <div className="review-section"><span>商品明细</span>{quotedItems.map(line => <div key={line.id}><p>{line.menuItem.name}<small>× {line.quantity}</small></p><b>¥{formatMoney(line.menuItem.price * line.quantity)}</b></div>)}</div>
       <div className="review-section"><span>送达信息</span><div><p>{address}<small>{note.trim() ? `备注：${note.trim()}` : '无订单备注'}</small></p></div></div>
-      <div className="review-total"><span>预计支付</span><strong>¥{formatMoney(total)}</strong><small>商品 ¥{formatMoney(subtotal)} + 配送 ¥{formatMoney(deliveryFee)}</small></div>
+      <div className="review-total"><span>预计支付</span><strong>¥{formatMoney(reviewTotal)}</strong><small>商品 ¥{formatMoney(reviewSubtotal)} + 配送 ¥{formatMoney(reviewDeliveryFee)}</small></div>
       <div className="demo-payment-note"><LockKeyhole size={16} /><span><b>演示环境，不会真实扣款</b><small>提交后可完整体验支付、制作和配送进度。</small></span></div>
       {submitError && <p className="checkout-submit-error" role="alert">{submitError}</p>}
-      <button className="primary-button checkout-submit" type="button" disabled={isSubmitting} onClick={placeOrder}>{isSubmitting ? <><i className="button-spinner" />正在提交订单…</> : <><CreditCard size={17} />确认提交 <span>¥{formatMoney(total)}</span></>}</button>
+      <button className="primary-button checkout-submit" type="button" disabled={isSubmitting} onClick={placeOrder}>{isSubmitting ? <><i className="button-spinner" />正在提交订单…</> : <><CreditCard size={17} />确认提交 <span>¥{formatMoney(reviewTotal)}</span></>}</button>
     </div>}
   </section>;
 }

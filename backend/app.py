@@ -857,6 +857,10 @@ class CreateOrderRequest(BaseModel):
     note: str = Field(default="", max_length=300)
 
 
+class CartQuoteRequest(BaseModel):
+    items: list[CartLine] = Field(min_length=1, max_length=30)
+
+
 class ActionRequest(BaseModel):
     action: str
     note: str = Field(default="", max_length=300)
@@ -1379,28 +1383,153 @@ def reorder_preview(order_id: str, user: User = Depends(current_user), db: Sessi
     }
 
 
+def build_checkout_quote(lines: list[CartLine], db: Session) -> dict[str, Any]:
+    requested_restaurant_ids = {str(line.restaurant.get("id") or "") for line in lines}
+    requested_restaurant_ids.discard("")
+    restaurant = db.get(Restaurant, next(iter(requested_restaurant_ids))) if len(requested_restaurant_ids) == 1 else None
+    item_ids = [str(line.menuItem.get("id") or "") for line in lines]
+    current_items = {
+        item.id: item
+        for item in db.scalars(select(MenuItem).where(MenuItem.id.in_([item_id for item_id in item_ids if item_id]))).all()
+    }
+    preview_items: list[dict[str, Any]] = []
+    unavailable_items: list[dict[str, str]] = []
+    quantity_adjustments: list[dict[str, Any]] = []
+    previous_subtotal = 0.0
+    price_changed = False
+
+    for line in lines:
+        item_id = str(line.menuItem.get("id") or "")
+        item = current_items.get(item_id)
+        fallback_name = str(line.menuItem.get("name") or "未知商品")
+        try:
+            previous_price = float(line.menuItem.get("price", 0))
+        except (TypeError, ValueError):
+            previous_price = 0.0
+        previous_subtotal += previous_price * line.quantity
+        if not item:
+            unavailable_items.append({"name": fallback_name, "reason": "商品已下线"})
+            continue
+        if not restaurant or item.restaurant_id != restaurant.id:
+            unavailable_items.append({"name": item.name, "reason": "商品不属于当前门店"})
+            continue
+        if not item.is_available:
+            unavailable_items.append({"name": item.name, "reason": "当前暂不可售"})
+            continue
+        if item.stock < 1:
+            unavailable_items.append({"name": item.name, "reason": "当前已售罄"})
+            continue
+        quantity = min(line.quantity, item.stock, 20)
+        if quantity < line.quantity:
+            quantity_adjustments.append({"name": item.name, "fromQuantity": line.quantity, "toQuantity": quantity})
+        if abs(item.price - previous_price) >= 0.01:
+            price_changed = True
+        preview_items.append({
+            "menuItem": menu_data(item),
+            "requestedQuantity": line.quantity,
+            "quantity": quantity,
+            "previousPrice": previous_price,
+            "currentPrice": item.price,
+        })
+
+    previous_subtotal = round(previous_subtotal, 2)
+    current_subtotal = round(sum(row["currentPrice"] * row["quantity"] for row in preview_items), 2)
+    try:
+        previous_delivery_fee = float(lines[0].restaurant.get("deliveryFee", 0))
+    except (TypeError, ValueError):
+        previous_delivery_fee = 0.0
+    delivery_fee = restaurant.delivery_fee if restaurant else 0.0
+    delivery_fee_changed = bool(restaurant and abs(delivery_fee - previous_delivery_fee) >= 0.01)
+    min_order_gap = round(max(0.0, (restaurant.min_order_amount if restaurant else 0.0) - current_subtotal), 2)
+    has_single_restaurant = len(requested_restaurant_ids) == 1
+    can_checkout = bool(
+        has_single_restaurant
+        and restaurant
+        and restaurant.is_open
+        and preview_items
+        and not unavailable_items
+        and not quantity_adjustments
+        and min_order_gap <= 0
+    )
+    if not has_single_restaurant:
+        notice = "购物车门店信息有冲突，请重新选择商品"
+    elif not restaurant:
+        notice = "当前门店已下线，请让小呆重新推荐"
+    elif not restaurant.is_open:
+        notice = "当前门店暂停营业，请让小呆换一份"
+    elif not preview_items:
+        notice = "购物车商品当前都不可售，请重新选择"
+    elif unavailable_items or quantity_adjustments:
+        notice = "部分商品状态有变化，请先更新购物车"
+    elif min_order_gap > 0:
+        notice = f"实时商品金额还差 ¥{min_order_gap:g} 起送"
+    elif price_changed or delivery_fee_changed:
+        notice = "价格信息有变化，请确认后再提交"
+    else:
+        notice = "价格与库存已实时核对"
+    return {
+        "restaurant": restaurant_data(restaurant) if restaurant else None,
+        "items": preview_items,
+        "unavailableItems": unavailable_items,
+        "quantityAdjustments": quantity_adjustments,
+        "previousSubtotal": previous_subtotal,
+        "currentSubtotal": current_subtotal,
+        "previousDeliveryFee": previous_delivery_fee,
+        "deliveryFee": delivery_fee,
+        "previousTotal": round(previous_subtotal + previous_delivery_fee, 2),
+        "currentTotal": round(current_subtotal + delivery_fee, 2),
+        "minOrderGap": min_order_gap,
+        "priceChanged": price_changed,
+        "deliveryFeeChanged": delivery_fee_changed,
+        "canCheckout": can_checkout,
+        "notice": notice,
+        "quotedAt": utc_now().isoformat(),
+    }
+
+
+@app.post("/api/orders/quote")
+def checkout_quote(payload: CartQuoteRequest, _: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {"success": True, "data": build_checkout_quote(payload.items, db)}
+
+
 @app.post("/api/orders", status_code=status.HTTP_201_CREATED)
 def create_order(payload: CreateOrderRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     with write_lock:
         item_ids = [line.menuItem.get("id") for line in payload.items]
         menu_items = {item.id: item for item in db.scalars(select(MenuItem).where(MenuItem.id.in_(item_ids))).all()}
         if len(menu_items) != len(set(item_ids)):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "购物车中包含不存在的菜品")
+            raise HTTPException(status.HTTP_409_CONFLICT, "购物车商品已下线，请重新核对")
         restaurant_ids = {menu_items[item_id].restaurant_id for item_id in item_ids}
         if len(restaurant_ids) != 1:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "一次订单只能选择一家餐厅")
         restaurant = db.get(Restaurant, restaurant_ids.pop())
         if not restaurant or not restaurant.is_open:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "餐厅当前未营业")
+            raise HTTPException(status.HTTP_409_CONFLICT, "门店营业状态已变化，请重新核对")
+        if any(line.restaurant.get("id") != restaurant.id for line in payload.items):
+            raise HTTPException(status.HTTP_409_CONFLICT, "购物车门店信息已变化，请重新核对")
+        for line in payload.items:
+            item = menu_items[line.menuItem["id"]]
+            try:
+                expected_price = float(line.menuItem.get("price"))
+            except (TypeError, ValueError):
+                raise HTTPException(status.HTTP_409_CONFLICT, "商品价格信息已过期，请重新核对")
+            if abs(expected_price - item.price) >= 0.01:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"{item.name} 价格已变化，请重新核对")
+            if not item.is_available or item.stock < line.quantity:
+                raise HTTPException(status.HTTP_409_CONFLICT, f"{item.name} 库存已变化，请重新核对")
+        try:
+            expected_delivery_fee = float(payload.items[0].restaurant.get("deliveryFee"))
+        except (TypeError, ValueError):
+            raise HTTPException(status.HTTP_409_CONFLICT, "配送费信息已过期，请重新核对")
+        if abs(expected_delivery_fee - restaurant.delivery_fee) >= 0.01:
+            raise HTTPException(status.HTTP_409_CONFLICT, "配送费已变化，请重新核对")
         subtotal = round(sum(menu_items[line.menuItem["id"]].price * line.quantity for line in payload.items), 2)
         if subtotal < restaurant.min_order_amount:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"起送价为 ¥{restaurant.min_order_amount:g}")
+            raise HTTPException(status.HTTP_409_CONFLICT, f"当前起送价为 ¥{restaurant.min_order_amount:g}，请重新核对")
         order = Order(id=new_id(), customer_id=user.id, restaurant_id=restaurant.id, status="pending_payment", subtotal=subtotal, delivery_fee=restaurant.delivery_fee, total=round(subtotal + restaurant.delivery_fee, 2), address_snapshot=payload.address, note=payload.note)
         db.add(order)
         for line in payload.items:
             item = menu_items[line.menuItem["id"]]
-            if not item.is_available or item.stock < line.quantity:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{item.name} 库存不足")
             db.add(OrderItem(id=new_id(), order_id=order.id, menu_item_id=item.id, name=item.name, price=item.price, quantity=line.quantity))
         add_order_event(db, order, user.id, "订单已创建，等待支付")
         db.commit()

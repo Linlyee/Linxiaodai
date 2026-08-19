@@ -138,6 +138,31 @@ export interface CartItem {
   quantity: number;
 }
 
+export interface CheckoutQuote {
+  restaurant: Restaurant | null;
+  items: Array<{
+    menuItem: MenuItem;
+    requestedQuantity: number;
+    quantity: number;
+    previousPrice: number;
+    currentPrice: number;
+  }>;
+  unavailableItems: Array<{ name: string; reason: string }>;
+  quantityAdjustments: Array<{ name: string; fromQuantity: number; toQuantity: number }>;
+  previousSubtotal: number;
+  currentSubtotal: number;
+  previousDeliveryFee: number;
+  deliveryFee: number;
+  previousTotal: number;
+  currentTotal: number;
+  minOrderGap: number;
+  priceChanged: boolean;
+  deliveryFeeChanged: boolean;
+  canCheckout: boolean;
+  notice: string;
+  quotedAt: string;
+}
+
 export type SavedMealOccasion = 'anytime' | 'workday' | 'reward' | 'together' | 'light';
 
 export interface SavedMeal {

@@ -2,6 +2,7 @@ import type {
   ApiResponse,
   BlindBoxOpenResult,
   CartItem,
+  CheckoutQuote,
   ChatMessage,
   ConversationSummary,
   ExtractedRequirements,
@@ -100,6 +101,12 @@ export const api = {
   },
   orders() {
     return request<Order[]>('/api/orders');
+  },
+  checkoutQuote(items: CartItem[]) {
+    return request<CheckoutQuote>('/api/orders/quote', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
   },
   reorderPreview(id: string) {
     return request<ReorderPreview>(`/api/orders/${id}/reorder-preview`);

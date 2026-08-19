@@ -3557,6 +3557,34 @@ summary {
 .checkout-primary span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .checkout-safe { display: flex; align-items: center; justify-content: center; gap: 5px; color: #74827c; font-size: 10px; }
 
+.quote-recovery {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr);
+  gap: 9px 10px;
+  margin: 12px 0;
+  padding: 13px;
+  border: 1px solid #ead6c4;
+  border-radius: 14px;
+  color: #765333;
+  background: #fff9ef;
+}
+.quote-recovery > svg { margin-top: 1px; color: #a2602b; }
+.quote-recovery > div:not(.quote-recovery-actions) { display: grid; gap: 3px; }
+.quote-recovery > div > b { font-size: 12px; }
+.quote-recovery > div > span { color: #8a725b; font-size: 11px; line-height: 1.5; }
+.quote-recovery ul,
+.quote-change-note ul { grid-column: 1 / -1; display: grid; gap: 6px; margin: 0; padding: 9px 10px; border-radius: 10px; background: rgba(255,255,255,0.72); list-style: none; }
+.quote-recovery li,
+.quote-change-note li { display: flex; justify-content: space-between; gap: 12px; color: #765f4b; font-size: 11px; line-height: 1.45; }
+.quote-recovery li b,
+.quote-change-note li b { flex: 0 0 auto; font-size: inherit; font-variant-numeric: tabular-nums; }
+.quote-recovery-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.quote-recovery-actions button { min-height: 44px; padding: 0 10px; border: 1px solid var(--forest); border-radius: 10px; color: white; background: var(--forest); font-size: 11px; font-weight: 800; transition: background var(--motion-fast) ease, border-color var(--motion-fast) ease; }
+.quote-recovery-actions button:hover { border-color: #285c50; background: #285c50; }
+.quote-recovery-actions .quote-alternative { border-color: #ddcfc0; color: #755d48; background: white; }
+.quote-recovery-actions .quote-alternative:hover { border-color: #cbb9a7; background: #fffdf9; }
+.quote-recovery-actions button:only-child { grid-column: 1 / -1; }
+
 .checkout-review { display: grid; gap: 12px; animation: checkout-review-enter var(--motion-normal) ease-out; }
 @keyframes checkout-review-enter { from { opacity: 0; transform: translateX(8px); } }
 .checkout-back { min-height: 40px; width: fit-content; display: inline-flex; align-items: center; gap: 5px; margin: -6px 0 -2px; padding: 0 8px; border: 0; border-radius: 9px; color: #66766f; background: transparent; font-size: 11px; font-weight: 800; }
@@ -3566,6 +3594,16 @@ summary {
 .review-hero > div { display: grid; gap: 3px; }
 .review-hero strong { font-family: Georgia,"Songti SC",serif; font-size: 16px; }
 .review-hero span { color: #687a71; font-size: 11px; }
+.quote-change-note { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px 9px; padding: 12px; border: 1px solid #ead6c4; border-radius: 13px; color: #765333; background: #fff9ef; }
+.quote-change-note > svg { margin-top: 1px; color: #a2602b; }
+.quote-change-note > div { display: grid; gap: 2px; }
+.quote-change-note > div b { font-size: 12px; }
+.quote-change-note > div span { color: #8a725b; font-size: 11px; line-height: 1.45; }
+.quote-verified { display: flex; align-items: flex-start; gap: 8px; padding: 10px 11px; border: 1px solid #d4e3d9; border-radius: 12px; color: #35644f; background: #f0f7f2; }
+.quote-verified > svg { flex: 0 0 auto; margin-top: 1px; }
+.quote-verified > span { display: grid; gap: 2px; }
+.quote-verified b { font-size: 12px; }
+.quote-verified small { color: #71837a; font-size: 11px; line-height: 1.45; }
 .review-section { display: grid; gap: 8px; padding: 13px; border: 1px solid #dfe6e1; border-radius: 14px; background: #fff; }
 .review-section > span { color: #85918c; font-size: 10px; font-weight: 900; letter-spacing: 0.08em; }
 .review-section > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; color: #52655c; font-size: 12px; }
