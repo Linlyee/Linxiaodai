@@ -202,6 +202,29 @@ export interface Order {
   reflection?: MealReflection | null;
 }
 
+export interface ReorderPreview {
+  orderId: string;
+  restaurant: Restaurant | null;
+  items: Array<{
+    menuItem: MenuItem;
+    quantity: number;
+    previousPrice: number;
+    currentPrice: number;
+  }>;
+  unavailableItems: Array<{ name: string; reason: string }>;
+  quantityAdjustments: Array<{ name: string; fromQuantity: number; toQuantity: number }>;
+  originalSubtotal: number;
+  originalDeliveryFee: number;
+  originalTotal: number;
+  currentSubtotal: number;
+  deliveryFee: number;
+  currentTotal: number;
+  priceChanged: boolean;
+  deliveryFeeChanged: boolean;
+  canReorder: boolean;
+  notice: string;
+}
+
 export type MealMood = 'delighted' | 'comforted' | 'satisfied' | 'not_for_me';
 export type TasteTag = 'flavorful' | 'just_right' | 'fresh' | 'generous' | 'fast' | 'surprising' | 'reorder';
 

@@ -1308,6 +1308,77 @@ def list_orders(user: User = Depends(current_user), db: Session = Depends(get_db
     return {"success": True, "data": [order_data(db, row, include_events=True) for row in rows]}
 
 
+@app.get("/api/orders/{order_id}/reorder-preview")
+def reorder_preview(order_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    order = db.get(Order, order_id)
+    if not order or order.customer_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "订单不存在")
+    restaurant = db.get(Restaurant, order.restaurant_id)
+    lines = db.scalars(select(OrderItem).where(OrderItem.order_id == order.id)).all()
+    preview_items: list[dict[str, Any]] = []
+    unavailable_items: list[dict[str, str]] = []
+    quantity_adjustments: list[dict[str, Any]] = []
+    price_changed = False
+    for line in lines:
+        item = db.get(MenuItem, line.menu_item_id)
+        if not item or item.restaurant_id != order.restaurant_id:
+            unavailable_items.append({"name": line.name, "reason": "商品已下线"})
+            continue
+        if not item.is_available:
+            unavailable_items.append({"name": line.name, "reason": "当前暂不可售"})
+            continue
+        if item.stock < 1:
+            unavailable_items.append({"name": line.name, "reason": "当前已售罄"})
+            continue
+        quantity = min(line.quantity, item.stock, 20)
+        if quantity < line.quantity:
+            quantity_adjustments.append({"name": item.name, "fromQuantity": line.quantity, "toQuantity": quantity})
+        if abs(item.price - line.price) >= 0.01:
+            price_changed = True
+        preview_items.append({
+            "menuItem": menu_data(item),
+            "quantity": quantity,
+            "previousPrice": line.price,
+            "currentPrice": item.price,
+        })
+    current_subtotal = round(sum(row["currentPrice"] * row["quantity"] for row in preview_items), 2)
+    delivery_fee = restaurant.delivery_fee if restaurant else 0
+    delivery_fee_changed = bool(restaurant and abs(delivery_fee - order.delivery_fee) >= 0.01)
+    can_reorder = bool(restaurant and restaurant.is_open and preview_items)
+    if not restaurant:
+        notice = "原门店已下线，暂时无法复购"
+    elif not restaurant.is_open:
+        notice = "原门店当前暂停营业，请稍后再试"
+    elif not preview_items:
+        notice = "原订单商品当前都不可售，已为你保留订单记录"
+    elif unavailable_items or quantity_adjustments:
+        notice = "已按当前可售商品和库存调整后加入购物车"
+    elif price_changed:
+        notice = "商品价格有变化，已按当前价格加入购物车"
+    else:
+        notice = "原订单商品已按当前价格加入购物车"
+    return {
+        "success": True,
+        "data": {
+            "orderId": order.id,
+            "restaurant": restaurant_data(restaurant) if restaurant else None,
+            "items": preview_items,
+            "unavailableItems": unavailable_items,
+            "quantityAdjustments": quantity_adjustments,
+            "originalSubtotal": order.subtotal,
+            "originalDeliveryFee": order.delivery_fee,
+            "originalTotal": order.total,
+            "currentSubtotal": current_subtotal,
+            "deliveryFee": delivery_fee,
+            "currentTotal": round(current_subtotal + delivery_fee, 2),
+            "priceChanged": price_changed,
+            "deliveryFeeChanged": delivery_fee_changed,
+            "canReorder": can_reorder,
+            "notice": notice,
+        },
+    }
+
+
 @app.post("/api/orders", status_code=status.HTTP_201_CREATED)
 def create_order(payload: CreateOrderRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     with write_lock:

@@ -3652,6 +3652,49 @@ summary {
 .cancel-confirmation button { min-height: 38px; padding: 0 9px; border: 1px solid #e3d7d3; border-radius: 8px; color: #655b57; background: #fff; font-size: 10px; font-weight: 800; }
 .cancel-confirmation .confirm-cancel { border-color: #a93d2c; color: white; background: #a93d2c; }
 
+.completed-order-actions { display: grid; gap: 8px; }
+.order-reorder {
+  width: 100%;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid #cbded2;
+  border-radius: 12px;
+  color: var(--forest);
+  background: #edf5ef;
+  text-align: left;
+  transition: border-color var(--motion-fast) ease, background var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+.order-reorder:hover { border-color: #9fbbaa; background: #e5f1e8; box-shadow: var(--shadow-sm); }
+.order-reorder:disabled { cursor: not-allowed; opacity: 0.68; }
+.order-reorder > span { display: grid; gap: 2px; }
+.order-reorder b { font-size: 12px; }
+.order-reorder small { color: #6f8177; font-size: 11px; }
+.order-reorder .button-spinner { width: 16px; height: 16px; }
+
+.reorder-confirmation {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr);
+  align-items: start;
+  gap: 8px 9px;
+  padding: 11px;
+  border: 1px solid #e4d6c6;
+  border-radius: 12px;
+  color: #735b3d;
+  background: #fff9ef;
+}
+.reorder-confirmation > svg { margin-top: 2px; }
+.reorder-confirmation > div { display: grid; gap: 3px; }
+.reorder-confirmation b { font-size: 12px; }
+.reorder-confirmation span { color: #816f59; font-size: 11px; line-height: 1.45; }
+.reorder-confirmation button { min-height: 44px; padding: 0 10px; border: 1px solid #ddd6cb; border-radius: 9px; color: #655f56; background: white; font-size: 11px; font-weight: 800; }
+.reorder-confirmation button:first-of-type { grid-column: 1 / 2; }
+.reorder-confirmation .confirm-reorder { grid-column: 2 / 3; border-color: var(--forest); color: white; background: var(--forest); }
+.reorder-confirmation button:disabled { cursor: not-allowed; opacity: 0.58; }
+
 @media (max-width: 620px) {
   .appetite-entry { grid-template-columns: 36px 1fr; }
   .appetite-entry i { display: none; }

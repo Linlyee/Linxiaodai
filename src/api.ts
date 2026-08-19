@@ -12,6 +12,7 @@ import type {
   TasteProfile,
   TasteTag,
   ProviderSource,
+  ReorderPreview,
   RecommendationResult,
   Restaurant,
   UserProfile,
@@ -99,6 +100,9 @@ export const api = {
   },
   orders() {
     return request<Order[]>('/api/orders');
+  },
+  reorderPreview(id: string) {
+    return request<ReorderPreview>(`/api/orders/${id}/reorder-preview`);
   },
   createOrder(items: CartItem[], address: string, note = '') {
     return request<Order>('/api/orders', {
