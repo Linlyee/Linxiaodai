@@ -7,9 +7,9 @@
 ---
 
 **Project:** Linxiaodai
-**Generated:** 2026-08-12 21:39:39
-**Category:** Restaurant/Food Service
-**Design Dials:** Variance 5/10 (Balanced / Modern) | Motion 3/10 (Subtle) | Density 6/10 (Standard)
+**Updated:** 2026-08-19
+**Category:** Consumer Food Discovery / AI Ordering
+**Design Dials:** Variance 6/10 (Editorial / Modern) | Motion 4/10 (Purposeful) | Density 5/10 (Comfortable)
 
 ---
 
@@ -19,29 +19,29 @@
 
 | Role | Hex | CSS Variable |
 |------|-----|--------------|
-| Primary | `#DC2626` | `--color-primary` |
+| Primary | `#173F36` | `--color-primary` |
 | On Primary | `#FFFFFF` | `--color-on-primary` |
-| Secondary | `#F87171` | `--color-secondary` |
-| Accent/CTA | `#A16207` | `--color-accent` |
-| Background | `#FEF2F2` | `--color-background` |
-| Foreground | `#450A0A` | `--color-foreground` |
-| Muted | `#F0EDF1` | `--color-muted` |
-| Border | `#FECACA` | `--color-border` |
-| Destructive | `#DC2626` | `--color-destructive` |
-| Ring | `#DC2626` | `--color-ring` |
+| Secondary | `#E7EFEA` | `--color-secondary` |
+| Accent/CTA | `#BF4B36` | `--color-accent` |
+| Background | `#F7F8F4` | `--color-background` |
+| Foreground | `#17352F` | `--color-foreground` |
+| Muted | `#F0F3EF` | `--color-muted` |
+| Border | `#DFE5DF` | `--color-border` |
+| Destructive | `#B42318` | `--color-destructive` |
+| Ring | `#BF4B36` | `--color-ring` |
 
-**Color Notes:** Appetizing red + warm gold [Accent adjusted from #CA8A04 for WCAG 3:1]
+**Color Notes:** Deep forest communicates trust and calm; restrained coral is reserved for appetite and primary actions. Warm paper surfaces create an editorial food-magazine feel without sacrificing contrast.
 
 ### Typography
 
-- **Heading Font:** Playfair Display SC
-- **Body Font:** Karla
-- **Mood:** restaurant, menu, culinary, elegant, foodie, hospitality
-- **Google Fonts:** [Playfair Display SC + Karla](https://fonts.googleapis.com/css2?family=Karla:wght@300;400;500;600;700&family=Playfair+Display+SC:wght@400;700&display=swap)
+- **Heading Font:** Georgia / Songti SC (local-first editorial serif)
+- **Body Font:** Inter / PingFang SC (system-first product UI)
+- **Data Font:** JetBrains Mono / ui-monospace for prices and status labels
+- **Mood:** warm, trustworthy, editorial, calm, consumer-first
 
 **CSS Import:**
 ```css
-@import url('https://fonts.googleapis.com/css2?family=Karla:wght@300;400;500;600;700&family=Playfair+Display+SC:wght@400;700&display=swap');
+/* Local-first stack avoids render blocking and preserves Chinese legibility. */
 ```
 
 ### Spacing Variables
@@ -76,7 +76,7 @@
 ```css
 /* Primary Button */
 .btn-primary {
-  background: #A16207;
+  background: #BF4B36;
   color: white;
   padding: 12px 24px;
   border-radius: 8px;
@@ -93,8 +93,8 @@
 /* Secondary Button */
 .btn-secondary {
   background: transparent;
-  color: #DC2626;
-  border: 2px solid #DC2626;
+  color: #173F36;
+  border: 1px solid #DFE5DF;
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
@@ -107,7 +107,7 @@
 
 ```css
 .card {
-  background: #FEF2F2;
+  background: #FFFFFF;
   border-radius: 12px;
   padding: 24px;
   box-shadow: var(--shadow-md);
@@ -133,9 +133,9 @@
 }
 
 .input:focus {
-  border-color: #DC2626;
+  border-color: #BF4B36;
   outline: none;
-  box-shadow: 0 0 0 3px #DC262620;
+  box-shadow: 0 0 0 3px #BF4B3624;
 }
 ```
 
@@ -161,21 +161,21 @@
 
 ## Style Guidelines
 
-**Style:** Flat Design
+**Style:** Warm Editorial Flat Design
 
-**Keywords:** 2D, minimalist, bold colors, no shadows, clean lines, simple shapes, typography-focused, modern, icon-heavy
+**Keywords:** editorial serif, warm paper, forest green, coral CTA, restrained depth, product-first, calm confidence
 
-**Best For:** Web apps, mobile apps, cross-platform, startup MVPs, user-friendly, SaaS, dashboards, corporate
+**Best For:** Consumer food search, AI-assisted decisions, mobile ordering and delivery tracking
 
-**Key Effects:** No gradients/shadows, simple hover (color/opacity shift), fast loading, clean transitions (150-200ms ease), minimal icons
+**Key Effects:** One subtle shadow scale, tonal surfaces, 160–240ms state transitions, Lucide outline icons, no decorative blur
 
 ### Page Pattern
 
-**Pattern Name:** App Store Style Landing
+**Pattern Name:** Search-First Consumer Marketplace
 
-- **Conversion Strategy:** Show real screenshots. Include ratings (4.5+ stars). QR code for mobile. Platform-specific CTAs.
-- **CTA Placement:** Download buttons prominent (App Store + Play Store) throughout
-- **Section Order:** 1. Hero with device mockup, 2. Screenshots carousel, 3. Features with icons, 4. Reviews/ratings, 5. Download CTAs
+- **Conversion Strategy:** Natural-language search is the hero CTA. Recommendations expose product, payable price, sales, ETA and source freshness before any merchant detail.
+- **CTA Placement:** One clear primary action per recommendation: add the product. Channel redirect is secondary.
+- **Core Flow:** 1. State intent, 2. Compare product-first results, 3. Add to cart, 4. Confirm address/payment, 5. Track fulfillment.
 
 ---
 

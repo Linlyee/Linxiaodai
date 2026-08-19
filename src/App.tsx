@@ -390,12 +390,15 @@ function ChatWorkspace({ messages, requirements, restaurantCount, savedMeals, is
   messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; savedMeals: SavedMeal[]; isSending: boolean; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
 }) {
   const [input, setInput] = useState('');
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { if (messages.length > 0) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isSending]);
-  const submit = () => { const value = input.trim(); if (value) { setInput(''); onSend(value); } };
+  const submit = () => { const value = input.trim(); if (value) { setInput(''); setSuggestionsOpen(false); onSend(value); } };
   const examples = ['我想吃 20 元以内销量最好的午餐', '到手价 30 元内，来点清淡的', '想吃日料，配送别太久', '一个人加班，30 元左右'];
   const latestMessage = messages.at(-1);
   const recoveryOptions = latestMessage?.role === 'assistant' && !latestMessage.recommendations?.length && !isSending ? buildRecoveryOptions(requirements) : [];
+  const suggestions = buildComposerSuggestions(input, requirements);
   return <main className="workspace" id="main-content">
     <header className="topbar"><div><span className="topbar-kicker">TODAY'S PICK</span><h1>今天想吃点什么？</h1></div><div className="topbar-meta"><span className="status-dot" />{restaurantCount} 家可选门店</div></header>
     <section className="message-list">
@@ -403,7 +406,10 @@ function ChatWorkspace({ messages, requirements, restaurantCount, savedMeals, is
       {recoveryOptions.length > 0 && <section className="search-recovery" aria-label="调整搜索条件"><div><RotateCcw size={18} /><span><b>换个条件，马上再找</b><small>保留其他偏好，只调整最可能卡住结果的条件</small></span></div><div className="recovery-actions">{recoveryOptions.map(option => <button key={option.prompt} type="button" onClick={() => onSend(option.prompt)}><strong>{option.label}</strong><span>{option.detail}</span></button>)}</div></section>}
       {isSending && <div className="thinking"><span /><span /><span />小呆正在匹配商品...</div>}<div ref={endRef} />
     </section>
-    <footer className="composer-wrap"><div className="composer"><button className="icon-action" title="外卖盲盒" onClick={() => onBlindBox()}><Gift size={19} /></button><textarea value={input} rows={1} placeholder={summaryText(requirements) || '例如：20 元内、午餐、销量最好…'} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} /><button className="send-button" title="发送消息" disabled={!input.trim() || isSending} onClick={submit}><Send size={18} /></button></div><span className="composer-hint">按 Enter 发送 · Shift + Enter 换行</span></footer>
+    <footer className="composer-wrap" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSuggestionsOpen(false); }}>
+      {suggestionsOpen && suggestions.length > 0 && <section className="composer-suggestions" id="composer-suggestions" aria-label="搜索意图建议"><div><Sparkles size={15} /><span>帮你补全需求</span><small>选择后仍可继续编辑</small></div>{suggestions.map(suggestion => <button type="button" key={suggestion.text} onClick={() => { setInput(suggestion.text); setSuggestionsOpen(false); window.requestAnimationFrame(() => composerRef.current?.focus()); }}><span>{suggestion.text}</span><small>{suggestion.hint}</small><ArrowRight size={15} /></button>)}</section>}
+      <div className="composer"><button className="icon-action" aria-label="开启外卖盲盒" title="外卖盲盒" onClick={() => onBlindBox()}><Gift size={19} /></button><textarea ref={composerRef} value={input} rows={1} aria-autocomplete="list" aria-controls="composer-suggestions" aria-expanded={suggestionsOpen && suggestions.length > 0} placeholder={summaryText(requirements) || '例如：20 元内、午餐、销量最好…'} onFocus={() => setSuggestionsOpen(true)} onChange={event => { setInput(event.target.value); setSuggestionsOpen(true); }} onKeyDown={event => { if (event.key === 'Escape') { setSuggestionsOpen(false); return; } if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} /><button className="send-button" aria-label="发送消息" title="发送消息" disabled={!input.trim() || isSending} onClick={submit}><Send size={18} /></button></div><span className="composer-hint">按 Enter 发送 · Shift + Enter 换行 · Esc 收起建议</span>
+    </footer>
   </main>;
 }
 
@@ -523,6 +529,7 @@ function DiningRoomDialog({ requirements, onClose, onPick }: { requirements: Ext
 
 function RecommendationCard({ recommendation, isSaved, onAdd, onSave, blindBoxId, onFeedback }: { recommendation: RecommendationResult; isSaved: boolean; onAdd: (recommendation: RecommendationResult, index?: number) => void; onSave: (recommendation: RecommendationResult) => Promise<void>; blindBoxId?: string; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void }) {
   const [saving, setSaving] = useState(false);
+  const primaryItem = recommendation.menuItems[0];
   const pricing = recommendation.pricing || {
     itemPrice: recommendation.totalPrice,
     originalItemPrice: recommendation.menuItems.reduce((sum, item) => sum + (item.originalPrice || item.price), 0),
@@ -539,13 +546,20 @@ function RecommendationCard({ recommendation, isSaved, onAdd, onSave, blindBoxId
     syncedAt: recommendation.syncedAt,
   };
   const save = async () => { if (saving) return; setSaving(true); try { await onSave(recommendation); } finally { setSaving(false); } };
+  if (!primaryItem) return null;
+  const DishIcon = primaryItem.category.includes('汤') || primaryItem.name.includes('汤') ? Soup : primaryItem.category.includes('轻食') || primaryItem.name.includes('沙拉') ? Salad : UtensilsCrossed;
+  const visualTone = primaryItem.spiceLevel === 'hot' || primaryItem.spiceLevel === 'medium' ? 'spicy' : primaryItem.category.includes('轻食') ? 'fresh' : 'comfort';
   return <div className="recommendation-card">
-    <div className="rec-header"><div><h3>{recommendation.restaurant.name}</h3><p>{recommendation.restaurant.description}</p></div><div className="rec-header-actions"><button type="button" aria-label={isSaved ? `${recommendation.restaurant.name}的推荐商品已收藏` : `收藏${recommendation.restaurant.name}的推荐商品`} disabled={saving || isSaved} onClick={save}><Bookmark size={17} fill={isSaved ? 'currentColor' : 'none'} />{isSaved ? '已收藏' : saving ? '收藏中' : '收藏商品'}</button><span className="score">{Math.round(recommendation.score)} 分</span></div></div>
-    <div className="rec-meta"><span><Star size={15} />{recommendation.restaurant.rating}</span><span><Clock3 size={15} />{recommendation.estimatedDeliveryTime} 分钟</span><span><Flame size={15} />热度 {recommendation.heatScore}</span></div>
-    <p className="rec-reason">{recommendation.reason}</p>
+    <header className="rec-product-hero">
+      <div className={`dish-visual ${visualTone}`} aria-hidden="true"><span>TOP PICK</span><DishIcon size={35} strokeWidth={1.45} /><small>{primaryItem.category}</small></div>
+      <div className="rec-product-copy"><div className="product-eyebrow"><span><CheckCircle2 size={13} />首选商品</span><small>{recommendation.provider?.name || '渠道商品'}</small></div><h3>{primaryItem.name}</h3><p>{primaryItem.description || recommendation.restaurant.description}</p><div className="product-tags">{primaryItem.tags.slice(0, 3).map(tag => <span key={tag}>{tag}</span>)}</div><div className="store-line"><Store size={14} /><span>{recommendation.restaurant.name}</span><small>{recommendation.restaurant.categories.slice(0, 2).join(' · ')}</small></div></div>
+      <button className="rec-save" type="button" aria-label={isSaved ? `${primaryItem.name}已收藏` : `收藏${primaryItem.name}`} disabled={saving || isSaved} onClick={save}><Bookmark size={17} fill={isSaved ? 'currentColor' : 'none'} /><span>{isSaved ? '已收藏' : saving ? '收藏中' : '收藏'}</span></button>
+    </header>
+    <div className="rec-meta"><span><Star size={15} />商品 {primaryItem.rating}</span><span><Flame size={15} />已售 {primaryItem.salesCount}</span><span><Clock3 size={15} />约 {recommendation.estimatedDeliveryTime} 分钟</span></div>
+    <p className="rec-reason"><Sparkles size={15} />{recommendation.reason}</p>
     <div className={`data-status ${recommendation.dataStatus}`}><span>{recommendation.dataStatus === 'synced' ? '渠道已连接' : '演示数据'}</span>{recommendation.provider?.orderUrl ? `来自 ${recommendation.provider.name}，下单前仍会校验价格与库存` : '当前可体验站内下单与配送流程，不会产生真实扣款'}</div>
-    <div className="menu-list">{recommendation.menuItems.map((item, index) => <div className="menu-row" key={item.id}><div><strong>{item.name}</strong><span>{item.tags.join(' / ') || item.description}</span><small>已售 {item.salesCount} 份 · 商品评分 {item.rating}{item.originalPrice && item.originalPrice > item.price ? ` · 原价 ¥${item.originalPrice}` : ''}</small></div><button aria-label={`将${item.name}加入购物车`} onClick={() => onAdd(recommendation, index)}><ShoppingCart size={15} />¥{item.price} · 加入</button></div>)}</div>
-    <div className="price-trust"><div className="payable-price"><span>预计到手</span><strong>¥{formatMoney(pricing.estimatedPayable)}</strong>{pricing.savings > 0 && <b>已省 ¥{formatMoney(pricing.savings)}</b>}</div><div className="price-breakdown"><span>商品 ¥{formatMoney(pricing.itemPrice)} + 配送 ¥{formatMoney(pricing.deliveryFee)}</span><span className={`freshness ${freshness.status}`}><RotateCcw size={13} />{freshness.label} · {pricing.budgetScope === 'delivered' ? '按到手价命中' : '按商品价命中'}</span></div><small>{pricing.disclaimer}</small></div>
+    {recommendation.menuItems.length > 1 && <div className="additional-items"><span>搭配内还有</span>{recommendation.menuItems.slice(1).map((item, index) => <button key={item.id} onClick={() => onAdd(recommendation, index + 1)}><span>{item.name}</span><b>¥{formatMoney(item.price)} · 加入</b></button>)}</div>}
+    <div className="price-trust"><div className="price-trust-top"><div className="payable-price"><span>预计到手</span><strong>¥{formatMoney(pricing.estimatedPayable)}</strong>{pricing.savings > 0 && <b>已省 ¥{formatMoney(pricing.savings)}</b>}</div><button className="rec-add-primary" aria-label={`将${primaryItem.name}加入购物车`} onClick={() => onAdd(recommendation, 0)}><ShoppingCart size={17} /><span>加入购物车</span><b>¥{formatMoney(primaryItem.price)}</b></button></div><div className="price-breakdown"><span>商品 ¥{formatMoney(pricing.itemPrice)} + 配送 ¥{formatMoney(pricing.deliveryFee)}</span><span className={`freshness ${freshness.status}`}><RotateCcw size={13} />{freshness.label} · {pricing.budgetScope === 'delivered' ? '按到手价命中' : '按商品价命中'}</span></div><small>{pricing.disclaimer}</small></div>
     <div className="rec-footer">{recommendation.provider?.orderUrl ? <><span className="redirect-ready">也可先加入购物车统一结算</span><a className="primary-button compact" href={recommendation.provider.orderUrl} target="_blank" rel="noreferrer" onClick={() => blindBoxId && onFeedback(blindBoxId, 'platform_opened')}>去 {recommendation.provider.name} 下单</a></> : <span className="redirect-ready"><CheckCircle2 size={15} />可加入购物车体验站内下单</span>}</div>
     {blindBoxId && <div className="feedback-row"><span>这次合胃口吗？</span><button onClick={() => onFeedback(blindBoxId, 'liked')}><ThumbsUp size={15} />喜欢</button><button onClick={() => onFeedback(blindBoxId, 'disliked')}><ThumbsDown size={15} />换个口味</button></div>}
   </div>;
@@ -674,6 +688,36 @@ function buildRecoveryOptions(requirements: ExtractedRequirements) {
   if (requirements.spiceLevel && options.length < 3) options.push({ label: '口味不限', detail: '扩大可选商品范围', prompt: '口味不限，其他条件不变' });
   if (!options.length) options.push({ label: '看看热销', detail: '30 元商品价内', prompt: '推荐 30 元以内销量最好的商品' });
   return options.slice(0, 3);
+}
+
+function buildComposerSuggestions(value: string, requirements: ExtractedRequirements) {
+  const query = value.trim();
+  const library = [
+    { text: '20 元以内销量最好的午餐', hint: '商品价 · 销量优先' },
+    { text: '到手价 30 元以内，30 分钟内送到', hint: '含配送费 · 速度优先' },
+    { text: '来点清淡的，不要海鲜', hint: '口味与忌口' },
+    { text: '想吃日料，评分最高的优先', hint: '菜系 · 评分优先' },
+  ];
+  if (!query) {
+    if (requirements.budget) {
+      const budget = requirements.budget.max;
+      return [
+        { text: `到手价 ${budget} 元以内，其他条件不变`, hint: '将配送费计入预算' },
+        { text: '30 分钟内送到，其他条件不变', hint: '增加配送时限' },
+        { text: '销量最好的优先，其他条件不变', hint: '调整排序方式' },
+      ];
+    }
+    return library.slice(0, 3);
+  }
+  const directMatches = library.filter(item => item.text.includes(query) || [...query].filter(character => character.trim()).every(character => item.text.includes(character)));
+  if (directMatches.length) return directMatches.slice(0, 3);
+  const contextual: Array<{ text: string; hint: string }> = [];
+  if (!/(销量|评分|最快|性价比|实惠)/.test(query)) contextual.push({ text: `${query}，销量最好的优先`, hint: '补充销量排序' });
+  if (!/(元|块|预算|到手价|商品价)/.test(query)) contextual.push({ text: `${query}，到手价 30 元以内`, hint: '补充含配送预算' });
+  if (!/(分钟|送到|配送|尽快)/.test(query)) contextual.push({ text: `${query}，30 分钟内送到`, hint: '补充配送时限' });
+  if (contextual.length < 3 && !/(清淡|辣|口味)/.test(query)) contextual.push({ text: `${query}，口味清淡一些`, hint: '补充口味偏好' });
+  if (contextual.length < 3) contextual.push({ text: `${query}，评分最高的优先`, hint: '补充评分排序' });
+  return contextual.slice(0, 3);
 }
 
 function formatMoney(value: number) { return Number.isInteger(value) ? String(value) : value.toFixed(2); }
