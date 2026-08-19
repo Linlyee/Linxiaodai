@@ -51,10 +51,11 @@ import {
   UtensilsCrossed,
   UsersRound,
   Vote,
+  WifiOff,
   Zap,
   X,
 } from 'lucide-react';
-import { api } from './api';
+import { API_HEALTH_EVENT, api, type ApiHealthDetail } from './api';
 import type {
   CartItem,
   ChatMessage,
@@ -212,10 +213,12 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   const [isRefreshingOrders, setIsRefreshingOrders] = useState(false);
   const [ordersSyncError, setOrdersSyncError] = useState('');
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [connectionState, setConnectionState] = useState<'online' | 'offline' | 'degraded' | 'checking'>(() => navigator.onLine ? 'online' : 'offline');
   const [toast, setToast] = useState('');
   const [toastUndo, setToastUndo] = useState<(() => Promise<void>) | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const passportReadyRef = useRef(false);
+  const connectionRetryingRef = useRef(false);
 
   const showToast = (message: string) => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
@@ -274,6 +277,21 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   const refreshWeeklyRecap = () => api.weeklyTasteRecap().then(setWeeklyRecap).catch(() => setWeeklyRecap(null));
   const refreshSavedMeals = () => api.savedMeals().then(setSavedMeals).catch(() => setSavedMeals([]));
 
+  const retryConnection = async (manual = false) => {
+    if (connectionRetryingRef.current) return;
+    connectionRetryingRef.current = true;
+    setConnectionState('checking');
+    const [restaurantResult, providerResult, orderResult] = await Promise.allSettled([api.restaurants(), api.providers(), api.orders()]);
+    if (restaurantResult.status === 'fulfilled') setRestaurants(restaurantResult.value);
+    if (providerResult.status === 'fulfilled') setProviders(providerResult.value);
+    if (orderResult.status === 'fulfilled') { setOrders(orderResult.value); setOrdersSyncError(''); }
+    const successCount = [restaurantResult, providerResult, orderResult].filter(result => result.status === 'fulfilled').length;
+    const nextState = successCount === 3 ? 'online' : navigator.onLine === false ? 'offline' : 'degraded';
+    setConnectionState(nextState);
+    connectionRetryingRef.current = false;
+    if (manual) showToast(nextState === 'online' ? '连接已恢复，商品与订单已经重新同步' : '仍未完全恢复，现有内容会继续保留');
+  };
+
   useEffect(() => {
     api.restaurants().then(setRestaurants).catch(() => setRestaurants([]));
     api.providers().then(setProviders).catch(() => setProviders([]));
@@ -283,6 +301,24 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     refreshTastePassport();
     refreshWeeklyRecap();
     refreshSavedMeals();
+  }, []);
+
+  useEffect(() => {
+    const handleOffline = () => setConnectionState('offline');
+    const handleOnline = () => { void retryConnection(false); };
+    const handleApiHealth = (event: Event) => {
+      const detail = (event as CustomEvent<ApiHealthDetail>).detail;
+      if (!detail || connectionRetryingRef.current) return;
+      setConnectionState(detail.state);
+    };
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener(API_HEALTH_EVENT, handleApiHealth);
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener(API_HEALTH_EVENT, handleApiHealth);
+    };
   }, []);
 
   useEffect(() => {
@@ -457,7 +493,7 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
       </div>
       <div className="profile-card"><div className="profile-avatar">{user.name.slice(0, 1)}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button className="logout-icon" type="button" aria-label="退出登录" title="退出登录" onClick={onLogout}><LogOut size={16} /></button></div>
     </aside>
-    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} deliveryAddress={deliveryAddress} savedMeals={savedMeals} tasteProfile={tasteProfile} activeOrders={activeOrders} isSending={isSending} isOpeningBox={isOpeningBox} onOpenHistory={() => setIsHistoryOpen(true)} onOpenAddress={() => setIsAddressDialogOpen(true)} onOpenOrders={() => openPanel('orders')} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onSaveMeal={saveRecommendation} onFeedback={sendBlindBoxFeedback} />
+    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} deliveryAddress={deliveryAddress} savedMeals={savedMeals} tasteProfile={tasteProfile} activeOrders={activeOrders} connectionState={connectionState} isSending={isSending} isOpeningBox={isOpeningBox} onOpenHistory={() => setIsHistoryOpen(true)} onOpenAddress={() => setIsAddressDialogOpen(true)} onOpenOrders={() => openPanel('orders')} onRetryConnection={() => retryConnection(true)} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onSaveMeal={saveRecommendation} onFeedback={sendBlindBoxFeedback} />
     <button className="dining-room-fab" onClick={() => setDiningRoomOpen(true)}><UsersRound size={18} /><span>和饭搭子一起选</span></button>
     <aside className={`right-panel ${isMobilePanelOpen ? 'panel-open' : ''}`} aria-label="点餐详情">
       <button className="mobile-panel-close" aria-label="关闭详情面板" onClick={() => setIsMobilePanelOpen(false)}><X size={20} /></button>
@@ -560,6 +596,20 @@ function RecommendationOverview({ recommendations }: { recommendations: Recommen
   return <section className="decision-overview" aria-label="推荐候选速览"><header><span><Sparkles size={15} />DECISION SHORTLIST</span><div><h3>先看差异，再决定吃哪份</h3><b>{recommendations.length} 个候选</b></div><p>价格均为预计到手价，点击候选可直接查看完整理由。</p></header><div className="overview-grid">{recommendations.map((recommendation, index) => { const item = recommendation.menuItems[0]; if (!item) return null; return <button type="button" key={recommendation.restaurant.id} onClick={() => reveal(recommendation.restaurant.id)}><i>{String(index + 1).padStart(2, '0')}</i><span><strong>{item.name}</strong><small><Store size={12} />{recommendation.restaurant.name}</small></span><em>{strength(recommendation, index)}</em><b>¥{formatMoney(payable(recommendation))}</b><ArrowRight size={15} /></button>; })}</div></section>;
 }
 
+function ConnectivityBanner({ state, onRetry }: { state: 'online' | 'offline' | 'degraded' | 'checking'; onRetry: () => void }) {
+  if (state === 'online') return null;
+  const checking = state === 'checking';
+  const offline = state === 'offline';
+  return <section className={`connectivity-banner ${state}`} role={offline ? 'alert' : 'status'} aria-live={offline ? 'assertive' : 'polite'} aria-busy={checking}>
+    <div className="connectivity-icon">{checking ? <RefreshCw className="spinning" size={18} /> : <WifiOff size={18} />}</div>
+    <div>
+      <strong>{checking ? '正在重新连接' : offline ? '你现在处于离线状态' : '数据同步暂时中断'}</strong>
+      <span>{checking ? '正在重新核对门店、商品和配送状态。' : offline ? '购物车和已显示的订单都已保留，恢复网络后会自动同步。' : '推荐、价格或配送可能不是最新；现有内容不会丢失。'}</span>
+    </div>
+    <button type="button" disabled={checking} onClick={onRetry}>{checking ? '同步中' : '重新同步'}<RefreshCw size={14} /></button>
+  </section>;
+}
+
 function ActiveOrderDock({ orders, onOpen }: { orders: Order[]; onOpen: () => void }) {
   const order = useMemo(() => [...orders].sort((left, right) => {
     const leftNeedsAction = left.status === 'pending_payment' ? 1 : 0;
@@ -590,8 +640,8 @@ function ActiveOrderDock({ orders, onOpen }: { orders: Order[]; onOpen: () => vo
   </section>;
 }
 
-function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddress, savedMeals, tasteProfile, activeOrders, isSending, isOpeningBox, onOpenHistory, onOpenAddress, onOpenOrders, onSend, onBlindBox, onAddToCart, onSaveMeal, onFeedback }: {
-  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; deliveryAddress: string; savedMeals: SavedMeal[]; tasteProfile: TasteProfile | null; activeOrders: Order[]; isSending: boolean; isOpeningBox: boolean; onOpenHistory: () => void; onOpenAddress: () => void; onOpenOrders: () => void; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
+function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddress, savedMeals, tasteProfile, activeOrders, connectionState, isSending, isOpeningBox, onOpenHistory, onOpenAddress, onOpenOrders, onRetryConnection, onSend, onBlindBox, onAddToCart, onSaveMeal, onFeedback }: {
+  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; deliveryAddress: string; savedMeals: SavedMeal[]; tasteProfile: TasteProfile | null; activeOrders: Order[]; connectionState: 'online' | 'offline' | 'degraded' | 'checking'; isSending: boolean; isOpeningBox: boolean; onOpenHistory: () => void; onOpenAddress: () => void; onOpenOrders: () => void; onRetryConnection: () => void; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
 }) {
   const [input, setInput] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -606,6 +656,7 @@ function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddres
   return <main className="workspace" id="main-content">
     <header className="topbar"><button className="topbar-history" type="button" aria-label="打开最近对话" onClick={onOpenHistory}><Menu size={20} /></button><div className="topbar-title"><span className="topbar-kicker">TODAY'S PICK</span><h1>今天想吃点什么？</h1></div><div className="topbar-actions"><button className={`delivery-location ${deliveryAddress ? 'ready' : ''}`} type="button" aria-label={deliveryAddress ? `当前送到：${deliveryAddress}，点击修改` : '设置送达地址'} aria-haspopup="dialog" onClick={onOpenAddress}><MapPin size={17} /><span><small>{deliveryAddress ? '当前送到' : '配送位置'}</small><strong>{deliveryAddress || '设置送达地址'}</strong></span><ChevronDown size={15} /></button><div className="topbar-meta"><span className="status-dot" />{restaurantCount} 家可选门店</div></div></header>
     <section className="message-list">
+      <ConnectivityBanner state={connectionState} onRetry={onRetryConnection} />
       <ActiveOrderDock orders={activeOrders} onOpen={onOpenOrders} />
       {messages.length === 0 ? <BlindBoxLaunchpad requirements={requirements} restaurantCount={restaurantCount} deliveryAddress={deliveryAddress} tasteProfile={tasteProfile} opening={isOpeningBox} onOpen={onBlindBox} onAsk={onSend} examples={examples} /> : messages.map(message => <article className={`message ${message.role}`} key={message.id}><div className="bubble">{message.content}</div>{message.recommendations?.length ? <><RecommendationOverview recommendations={message.recommendations} /><div className="recommendations">{message.recommendations.map((recommendation, index) => { const itemIds = recommendation.menuItems.map(item => item.id).sort().join('|'); const isSaved = savedMeals.some(saved => saved.restaurant?.id === recommendation.restaurant.id && [...saved.menuItemIds].sort().join('|') === itemIds); return <RecommendationCard key={`${recommendation.restaurant.id}-${recommendation.totalPrice}`} recommendation={recommendation} rank={index} isSaved={isSaved} onAdd={onAddToCart} onSave={onSaveMeal} blindBoxId={message.blindBoxId} onFeedback={onFeedback} />; })}</div></> : null}</article>)}
       {recoveryOptions.length > 0 && <section className="search-recovery" aria-label="调整搜索条件"><div><RotateCcw size={18} /><span><b>换个条件，马上再找</b><small>保留其他偏好，只调整最可能卡住结果的条件</small></span></div><div className="recovery-actions">{recoveryOptions.map(option => <button key={option.prompt} type="button" onClick={() => onSend(option.prompt)}><strong>{option.label}</strong><span>{option.detail}</span></button>)}</div></section>}

@@ -4422,3 +4422,94 @@ summary {
     height: 3px;
   }
 }
+
+/* Connection recovery — keep stale content useful while making freshness explicit */
+.connectivity-banner {
+  width: min(780px, 100%);
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  margin: 0 auto 12px;
+  padding: 10px 11px;
+  border: 1px solid #e3d2ae;
+  border-radius: 15px;
+  color: #684d23;
+  background: rgba(255, 250, 237, 0.97);
+  box-shadow: 0 8px 24px rgba(91, 68, 32, 0.08);
+}
+
+.connectivity-banner.offline {
+  border-color: #e3c2b8;
+  color: #823a2e;
+  background: rgba(255, 246, 243, 0.98);
+}
+
+.connectivity-banner.checking {
+  border-color: #cbdcd2;
+  color: var(--forest);
+  background: rgba(246, 250, 247, 0.98);
+}
+
+.connectivity-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: #7d5d29;
+  background: #f6e9c8;
+}
+
+.offline .connectivity-icon { color: #923e31; background: #f6dfd9; }
+.checking .connectivity-icon { color: #356f55; background: #e3f0e7; }
+.connectivity-icon .spinning { animation: order-refresh-spin 0.8s linear infinite; }
+.connectivity-banner > div:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.connectivity-banner strong { color: currentColor; font-size: 12px; }
+.connectivity-banner span { color: color-mix(in srgb, currentColor 82%, white); font-size: 10px; line-height: 1.45; }
+
+.connectivity-banner > button {
+  min-width: 82px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, currentColor 28%, white);
+  border-radius: 11px;
+  color: currentColor;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 10px;
+  font-weight: 900;
+  transition: border-color var(--motion-fast) ease, background-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+
+.connectivity-banner > button:hover,
+.connectivity-banner > button:focus-visible { border-color: currentColor; background: white; box-shadow: var(--shadow-sm); }
+.connectivity-banner > button:disabled { cursor: wait; opacity: 0.64; }
+
+@media (max-width: 620px) {
+  .connectivity-banner { min-height: 68px; gap: 8px; margin-bottom: 10px; padding: 8px; border-radius: 14px; }
+  .connectivity-icon { width: 36px; height: 36px; border-radius: 10px; }
+  .connectivity-banner strong { font-size: 12px; }
+  .connectivity-banner span { font-size: 10px; }
+  .connectivity-banner > button { min-width: 72px; padding: 0 7px; }
+  .connectivity-banner > button svg { display: none; }
+}
+
+@media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+  .connectivity-banner {
+    min-height: 48px;
+    height: 48px;
+    gap: 7px;
+    margin-bottom: 8px;
+    padding: 4px 7px;
+    border-radius: 13px;
+  }
+  .connectivity-icon { width: 34px; height: 34px; }
+  .connectivity-banner > div:nth-child(2) span { display: none; }
+  .connectivity-banner > button { min-width: 74px; min-height: 38px; }
+  .message-list:has(.connectivity-banner) .active-order-dock { display: none; }
+}

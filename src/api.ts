@@ -20,17 +20,44 @@ import type {
 } from './types';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '';
+export const API_HEALTH_EVENT = 'linxiaodai:api-health';
+export type ApiHealthDetail = { state: 'online' | 'offline' | 'degraded'; message?: string };
+
+function broadcastApiHealth(detail: ApiHealthDetail) {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ApiHealthDetail>(API_HEALTH_EVENT, { detail }));
+}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const payload = (await response.json()) as ApiResponse<T>;
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 12000);
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+      ...options,
+      signal: options.signal || controller.signal,
+    });
+  } catch (reason) {
+    const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    const timedOut = reason instanceof DOMException && reason.name === 'AbortError';
+    broadcastApiHealth({ state: isOffline ? 'offline' : 'degraded', message: timedOut ? '请求超时' : '服务暂时不可达' });
+    if (timedOut) throw new Error('请求超时，请检查网络后重试');
+    throw new Error(isOffline ? '当前网络不可用，已为你保留现有内容' : '暂时无法连接服务，请稍后重试');
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+  broadcastApiHealth({ state: response.status >= 500 ? 'degraded' : 'online' });
+  let payload: ApiResponse<T>;
+  try {
+    payload = (await response.json()) as ApiResponse<T>;
+  } catch {
+    broadcastApiHealth({ state: 'degraded', message: '服务返回异常' });
+    throw new Error('服务返回异常，请稍后重试');
+  }
   if (!response.ok || !payload.success) {
     throw new Error(payload.error || '请求失败');
   }
