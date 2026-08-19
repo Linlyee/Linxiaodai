@@ -4,7 +4,7 @@ export interface UserProfile {
   id: string;
   name: string;
   email: string;
-  role: 'customer' | 'merchant' | 'admin';
+  role: 'customer';
   preferences: {
     spiceLevel: SpiceLevel;
     allergies: string[];
@@ -94,6 +94,8 @@ export interface ExtractedRequirements {
   spiceLevel?: SpiceLevel;
   mustAvoid?: string[];
   deliveryTimeLimit?: number;
+  sortBy?: 'sales' | 'rating' | 'speed' | 'value';
+  mealTime?: 'breakfast' | 'lunch' | 'dinner';
   additionalNotes?: string;
 }
 
@@ -120,6 +122,26 @@ export interface CartItem {
   quantity: number;
 }
 
+export type SavedMealOccasion = 'anytime' | 'workday' | 'reward' | 'together' | 'light';
+
+export interface SavedMeal {
+  id: string;
+  title: string;
+  occasion: SavedMealOccasion;
+  reason: string;
+  restaurant: Restaurant | null;
+  menuItemIds: string[];
+  menuItems: MenuItem[];
+  snapshotTotal: number;
+  currentTotal: number;
+  priceChanged: boolean;
+  isAvailable: boolean;
+  unavailableCount: number;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
 export type OrderStatus =
   | 'pending_payment'
   | 'paid'
@@ -133,6 +155,7 @@ export type OrderStatus =
 
 export interface Order {
   id: string;
+  restaurantId?: string;
   restaurantName: string;
   items: Array<{
     id: string;
@@ -150,18 +173,104 @@ export interface Order {
   updatedAt: string;
   address?: string;
   note?: string;
+  fulfillment: {
+    providerKey: string;
+    providerName: string;
+    mode: 'demo' | 'platform';
+    isLive: boolean;
+    trackingMode: 'simulated' | 'provider_callback';
+    trackingUrl: string | null;
+    notice: string;
+  };
   events?: Array<{ status: OrderStatus; note: string; createdAt: string }>;
+  reflection?: MealReflection | null;
 }
 
-export interface MerchantDashboard {
+export type MealMood = 'delighted' | 'comforted' | 'satisfied' | 'not_for_me';
+export type TasteTag = 'flavorful' | 'just_right' | 'fresh' | 'generous' | 'fast' | 'surprising' | 'reorder';
+
+export interface MealReflection {
+  mood: MealMood;
+  tags: TasteTag[];
+  note: string;
+  createdAt: string;
+}
+
+export interface TasteProfile {
+  checkInCount: number;
+  level: number;
+  levelName: string;
+  nextLevelAt: number | null;
+  favoriteCuisines: string[];
+  topTags: TasteTag[];
+  dominantMood: MealMood | null;
+}
+
+export interface TastePassportStamp {
+  cuisine: string;
+  label: string;
+  description: string;
+  unlocked: boolean;
+  orderCount: number;
+  unlockedAt: string | null;
+}
+
+export interface TastePassport {
+  stamps: TastePassportStamp[];
+  unlockedCount: number;
+  totalStamps: number;
+  completedOrderCount: number;
+  explorerPoints: number;
+  weeklyDistinctCount: number;
+  weeklyGoal: number;
+  weeklyCompleted: boolean;
+  suggestedCuisine: string | null;
+}
+
+export interface WeeklyTasteRecap {
+  weekOffset: number;
+  period: { start: string; end: string; label: string };
+  hasData: boolean;
+  orderCount: number;
+  itemCount: number;
+  totalSpent: number;
+  averageOrderValue: number;
+  activeDays: number;
+  distinctCuisineCount: number;
+  topCuisine: string | null;
+  topRestaurant: string | null;
+  dominantMood: MealMood | null;
+  topTags: TasteTag[];
+  mealMoment: { key: string; label: string } | null;
+  persona: { title: string; summary: string };
+  challenge: { cuisine: string; title: string; description: string; prompt: string };
+  shareText: string | null;
+}
+
+export interface DiningRoomCandidate {
+  index: number;
+  votes: number;
   restaurant: Restaurant;
-  metrics: {
-    todayOrders: number;
-    todayRevenue: number;
-    pendingOrders: number;
-    activeOrders: number;
-  };
-  recentOrders: Order[];
+  menuItems: MenuItem[];
+  totalPrice: number;
+  deliveryFee: number;
+  estimatedDeliveryTime: number;
+  reason: string;
+}
+
+export interface DiningRoom {
+  id: string;
+  code: string;
+  title: string;
+  status: 'open' | 'closed' | 'expired';
+  isHost: boolean;
+  participants: Array<{ id: string; name: string; isHost: boolean; hasVoted: boolean }>;
+  candidates: DiningRoomCandidate[];
+  myVote: number | null;
+  totalVotes: number;
+  consensusIndex: number | null;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface ApiResponse<T> {

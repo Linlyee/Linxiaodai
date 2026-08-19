@@ -12,33 +12,15 @@ from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, Literal
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, status
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./backend/linxiaodai.db")
 SESSION_DAYS = 14
-ORDER_STATUSES = {
-    "pending_payment",
-    "paid",
-    "accepted",
-    "preparing",
-    "ready_for_pickup",
-    "delivering",
-    "completed",
-    "cancelled",
-}
-TRANSITIONS = {
-    "paid": {"accepted", "cancelled"},
-    "accepted": {"preparing", "cancelled"},
-    "preparing": {"ready_for_pickup"},
-    "ready_for_pickup": {"delivering"},
-    "delivering": {"completed"},
-}
-
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
@@ -173,6 +155,54 @@ class OrderEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
 
 
+class MealReflection(Base):
+    __tablename__ = "meal_reflections"
+    __table_args__ = (UniqueConstraint("order_id", name="uq_meal_reflection_order"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id"), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    mood: Mapped[str] = mapped_column(String(30))
+    tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    note: Mapped[str] = mapped_column(String(160), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now(), index=True)
+
+
+class DiningRoom(Base):
+    __tablename__ = "dining_rooms"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    code: Mapped[str] = mapped_column(String(8), unique=True, index=True)
+    host_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(80), default="今晚吃什么")
+    requirements_json: Mapped[str] = mapped_column(Text, default="{}")
+    candidates_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class DiningRoomMember(Base):
+    __tablename__ = "dining_room_members"
+    __table_args__ = (UniqueConstraint("room_id", "user_id", name="uq_dining_room_member"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    room_id: Mapped[str] = mapped_column(ForeignKey("dining_rooms.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+
+
+class DiningRoomVote(Base):
+    __tablename__ = "dining_room_votes"
+    __table_args__ = (UniqueConstraint("room_id", "user_id", name="uq_dining_room_vote"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    room_id: Mapped[str] = mapped_column(ForeignKey("dining_rooms.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    candidate_index: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+
+
 class BlindBoxRecord(Base):
     __tablename__ = "blind_box_records"
 
@@ -192,6 +222,22 @@ class BlindBoxFeedback(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     action: Mapped[str] = mapped_column(String(30))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+
+
+class SavedMeal(Base):
+    __tablename__ = "saved_meals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    restaurant_id: Mapped[str] = mapped_column(ForeignKey("restaurants.id"), index=True)
+    menu_item_ids_json: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String(80))
+    occasion: Mapped[str] = mapped_column(String(30), default="anytime", index=True)
+    reason_snapshot: Mapped[str] = mapped_column(String(300), default="")
+    total_price_snapshot: Mapped[float] = mapped_column(Float, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class ProviderSource(Base):
@@ -314,9 +360,93 @@ def provider_data(source: ProviderSource, restaurant_count: int) -> dict[str, An
     }
 
 
+def saved_meal_data(db: Session, saved: SavedMeal) -> dict[str, Any]:
+    restaurant = db.get(Restaurant, saved.restaurant_id)
+    item_ids = parse_json(saved.menu_item_ids_json, [])
+    items_by_id = {item.id: item for item in db.scalars(select(MenuItem).where(MenuItem.id.in_(item_ids))).all()} if item_ids else {}
+    menu_items = [items_by_id[item_id] for item_id in item_ids if item_id in items_by_id]
+    unavailable_count = sum(1 for item_id in item_ids if item_id not in items_by_id or not items_by_id[item_id].is_available or items_by_id[item_id].stock < 1)
+    current_total = round(sum(item.price for item in menu_items), 2)
+    is_available = bool(restaurant and restaurant.is_open and menu_items and unavailable_count == 0 and len(menu_items) == len(item_ids))
+    return {
+        "id": saved.id,
+        "title": saved.title,
+        "occasion": saved.occasion,
+        "reason": saved.reason_snapshot,
+        "restaurant": restaurant_data(restaurant) if restaurant else None,
+        "menuItemIds": item_ids,
+        "menuItems": [menu_data(item) for item in menu_items],
+        "snapshotTotal": saved.total_price_snapshot,
+        "currentTotal": current_total,
+        "priceChanged": abs(current_total - saved.total_price_snapshot) >= 0.01,
+        "isAvailable": is_available,
+        "unavailableCount": unavailable_count,
+        "createdAt": utc_iso(saved.created_at),
+        "updatedAt": utc_iso(saved.updated_at),
+        "deletedAt": utc_iso(saved.deleted_at) if saved.deleted_at else None,
+    }
+
+
+def order_fulfillment_data(db: Session, restaurant_id: str) -> dict[str, Any]:
+    link = db.scalar(
+        select(ProviderRestaurantLink).where(ProviderRestaurantLink.restaurant_id == restaurant_id)
+    )
+    source = db.get(ProviderSource, link.provider_key) if link else None
+    is_live = bool(source and source.status == "authorized")
+    return {
+        "providerKey": source.key if source else "demo",
+        "providerName": source.name if source else "本地演示数据",
+        "mode": "platform" if is_live else "demo",
+        "isLive": is_live,
+        "trackingMode": "provider_callback" if is_live else "simulated",
+        "trackingUrl": None,
+        "notice": "订单与配送进度由平台实时同步" if is_live else "当前为演示履约，不会发起真实扣款或配送",
+    }
+
+
+DEMO_ORDER_STAGES = [
+    (0, "paid", "演示支付成功，正在向履约渠道提交订单"),
+    (4, "accepted", "渠道已确认订单"),
+    (9, "preparing", "餐品正在准备中"),
+    (16, "ready_for_pickup", "餐品已准备好，正在匹配配送"),
+    (24, "picked_up", "配送员已取餐"),
+    (28, "delivering", "配送员正在送往收货地址"),
+    (42, "completed", "订单已送达"),
+]
+
+
+def refresh_demo_order(db: Session, order: Order) -> bool:
+    if order.status in {"pending_payment", "cancelled", "completed"}:
+        return False
+    if order_fulfillment_data(db, order.restaurant_id)["isLive"]:
+        return False
+    paid_event = db.scalar(
+        select(OrderEvent)
+        .where(OrderEvent.order_id == order.id, OrderEvent.status == "paid")
+        .order_by(OrderEvent.created_at)
+    )
+    if not paid_event:
+        return False
+    started_at = paid_event.created_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    elapsed = max(0, int((utc_now() - started_at).total_seconds()))
+    current_index = next((index for index, (_, value, _) in enumerate(DEMO_ORDER_STAGES) if value == order.status), 0)
+    target_index = max(index for index, (seconds, _, _) in enumerate(DEMO_ORDER_STAGES) if elapsed >= seconds)
+    if target_index <= current_index:
+        return False
+    for index in range(current_index + 1, target_index + 1):
+        _, next_status, note = DEMO_ORDER_STAGES[index]
+        order.status = next_status
+        order.updated_at = utc_now()
+        add_order_event(db, order, None, note)
+    return True
+
+
 def order_data(db: Session, order: Order, include_events: bool = False) -> dict[str, Any]:
     restaurant = db.get(Restaurant, order.restaurant_id)
     rows = db.scalars(select(OrderItem).where(OrderItem.order_id == order.id)).all()
+    reflection = db.scalar(select(MealReflection).where(MealReflection.order_id == order.id))
     data: dict[str, Any] = {
         "id": order.id,
         "restaurantId": order.restaurant_id,
@@ -332,8 +462,15 @@ def order_data(db: Session, order: Order, include_events: bool = False) -> dict[
         "estimatedDeliveryTime": restaurant.avg_delivery_time if restaurant else 30,
         "address": order.address_snapshot,
         "note": order.note,
+        "fulfillment": order_fulfillment_data(db, order.restaurant_id),
         "createdAt": order.created_at.isoformat(),
         "updatedAt": order.updated_at.isoformat(),
+        "reflection": {
+            "mood": reflection.mood,
+            "tags": parse_json(reflection.tags_json, []),
+            "note": reflection.note,
+            "createdAt": reflection.created_at.isoformat(),
+        } if reflection else None,
     }
     if include_events:
         events = db.scalars(select(OrderEvent).where(OrderEvent.order_id == order.id).order_by(OrderEvent.created_at)).all()
@@ -343,6 +480,239 @@ def order_data(db: Session, order: Order, include_events: bool = False) -> dict[
 
 def add_order_event(db: Session, order: Order, actor_id: str | None, note: str = "") -> None:
     db.add(OrderEvent(id=new_id(), order_id=order.id, status=order.status, actor_id=actor_id, note=note))
+
+
+def taste_profile_data(db: Session, user: User, check_in_count: int | None = None) -> dict[str, Any]:
+    preferences = parse_json(user.preferences_json, {})
+    reflections = db.scalars(select(MealReflection).where(MealReflection.user_id == user.id).order_by(MealReflection.created_at.desc())).all()
+    tag_counts: dict[str, int] = {}
+    mood_counts: dict[str, int] = {}
+    for reflection in reflections:
+        mood_counts[reflection.mood] = mood_counts.get(reflection.mood, 0) + 1
+        for tag in parse_json(reflection.tags_json, []):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    favorite_cuisines = preferences.get("favoriteCuisines", [])
+    count = len(reflections) if check_in_count is None else int(check_in_count)
+    level = 1 + min(count // 3, 4)
+    level_names = ["初尝者", "寻味人", "风味收藏家", "味觉策展人", "懂吃生活家"]
+    return {
+        "checkInCount": count,
+        "level": level,
+        "levelName": level_names[level - 1],
+        "nextLevelAt": level * 3 if level < 5 else None,
+        "favoriteCuisines": favorite_cuisines[:5],
+        "topTags": [key for key, _ in sorted(tag_counts.items(), key=lambda item: (-item[1], item[0]))[:4]],
+        "dominantMood": max(mood_counts, key=mood_counts.get) if mood_counts else None,
+    }
+
+
+PASSPORT_STAMPS = [
+    {"cuisine": "川菜", "label": "热烈川味", "description": "麻辣鲜香，把胃口彻底叫醒"},
+    {"cuisine": "日料", "label": "清鲜日和", "description": "清爽细腻，收藏一份克制的鲜"},
+    {"cuisine": "韩餐", "label": "韩味分享", "description": "热闹浓郁，适合和饭搭子一起吃"},
+    {"cuisine": "面食", "label": "碳水故乡", "description": "一碗踏实主食，稳稳接住今天"},
+    {"cuisine": "轻食", "label": "轻盈绿洲", "description": "吃得满足，也保留身体的轻快"},
+]
+
+
+def taste_passport_data(db: Session, user: User) -> dict[str, Any]:
+    completed_orders = db.scalars(
+        select(Order).where(Order.customer_id == user.id, Order.status == "completed").order_by(Order.created_at)
+    ).all()
+    china_timezone = timezone(timedelta(hours=8))
+    local_now = utc_now().astimezone(china_timezone)
+    local_week_start = (local_now - timedelta(days=local_now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = local_week_start.astimezone(timezone.utc)
+    cuisine_orders: dict[str, list[datetime]] = {stamp["cuisine"]: [] for stamp in PASSPORT_STAMPS}
+    weekly_cuisines: set[str] = set()
+    for order in completed_orders:
+        restaurant = db.get(Restaurant, order.restaurant_id)
+        categories = parse_json(restaurant.categories_json, []) if restaurant else []
+        order_time = order.created_at if order.created_at.tzinfo else order.created_at.replace(tzinfo=timezone.utc)
+        for cuisine in cuisine_orders:
+            if cuisine in categories:
+                cuisine_orders[cuisine].append(order_time)
+                if order_time >= week_start:
+                    weekly_cuisines.add(cuisine)
+    stamps = [
+        {
+            **stamp,
+            "unlocked": bool(cuisine_orders[stamp["cuisine"]]),
+            "orderCount": len(cuisine_orders[stamp["cuisine"]]),
+            "unlockedAt": utc_iso(cuisine_orders[stamp["cuisine"]][0]) if cuisine_orders[stamp["cuisine"]] else None,
+        }
+        for stamp in PASSPORT_STAMPS
+    ]
+    unlocked_count = sum(1 for stamp in stamps if stamp["unlocked"])
+    reflection_count = db.scalar(select(func.count(MealReflection.id)).where(MealReflection.user_id == user.id)) or 0
+    suggested = next((stamp["cuisine"] for stamp in stamps if not stamp["unlocked"]), None)
+    weekly_goal = 3
+    return {
+        "stamps": stamps,
+        "unlockedCount": unlocked_count,
+        "totalStamps": len(stamps),
+        "completedOrderCount": len(completed_orders),
+        "explorerPoints": unlocked_count * 100 + len(completed_orders) * 20 + int(reflection_count) * 10,
+        "weeklyDistinctCount": min(len(weekly_cuisines), weekly_goal),
+        "weeklyGoal": weekly_goal,
+        "weeklyCompleted": len(weekly_cuisines) >= weekly_goal,
+        "suggestedCuisine": suggested,
+    }
+
+
+def weekly_taste_recap_data(db: Session, user: User, week_offset: int = 0) -> dict[str, Any]:
+    china_timezone = timezone(timedelta(hours=8))
+    local_now = utc_now().astimezone(china_timezone)
+    current_week_start = (local_now - timedelta(days=local_now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    local_start = current_week_start - timedelta(weeks=week_offset)
+    local_end = local_start + timedelta(days=7)
+    utc_start, utc_end = local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
+    orders = db.scalars(
+        select(Order).where(
+            Order.customer_id == user.id,
+            Order.status == "completed",
+            Order.created_at >= utc_start,
+            Order.created_at < utc_end,
+        ).order_by(Order.created_at)
+    ).all()
+
+    cuisine_counts: dict[str, int] = {}
+    restaurant_counts: dict[str, int] = {}
+    mood_counts: dict[str, int] = {}
+    tag_counts: dict[str, int] = {}
+    active_days: set[str] = set()
+    item_count = 0
+    total_spent = 0.0
+    moment_counts = {"lunch": 0, "dinner": 0, "late": 0}
+    for order in orders:
+        restaurant = db.get(Restaurant, order.restaurant_id)
+        categories = parse_json(restaurant.categories_json, []) if restaurant else []
+        for cuisine in categories:
+            if cuisine in {stamp["cuisine"] for stamp in PASSPORT_STAMPS}:
+                cuisine_counts[cuisine] = cuisine_counts.get(cuisine, 0) + 1
+        restaurant_name = restaurant.name if restaurant else "已下线店铺"
+        restaurant_counts[restaurant_name] = restaurant_counts.get(restaurant_name, 0) + 1
+        order_time = order.created_at if order.created_at.tzinfo else order.created_at.replace(tzinfo=timezone.utc)
+        local_order_time = order_time.astimezone(china_timezone)
+        active_days.add(local_order_time.date().isoformat())
+        if 11 <= local_order_time.hour < 15:
+            moment_counts["lunch"] += 1
+        elif 17 <= local_order_time.hour < 22:
+            moment_counts["dinner"] += 1
+        else:
+            moment_counts["late"] += 1
+        total_spent += order.total
+        item_count += sum(row.quantity for row in db.scalars(select(OrderItem).where(OrderItem.order_id == order.id)).all())
+        reflection = db.scalar(select(MealReflection).where(MealReflection.order_id == order.id))
+        if reflection:
+            mood_counts[reflection.mood] = mood_counts.get(reflection.mood, 0) + 1
+            for tag in parse_json(reflection.tags_json, []):
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    top_cuisine = max(cuisine_counts, key=cuisine_counts.get) if cuisine_counts else None
+    top_restaurant = max(restaurant_counts, key=restaurant_counts.get) if restaurant_counts else None
+    dominant_mood = max(mood_counts, key=mood_counts.get) if mood_counts else None
+    top_tags = [tag for tag, _ in sorted(tag_counts.items(), key=lambda item: (-item[1], item[0]))[:3]]
+    moment_key = max(moment_counts, key=moment_counts.get) if orders else None
+    moment_labels = {"lunch": "午间能量站", "dinner": "晚餐仪式派", "late": "错峰觅食家"}
+    available_cuisines = [stamp["cuisine"] for stamp in PASSPORT_STAMPS]
+    challenge_cuisine = next((cuisine for cuisine in available_cuisines if cuisine not in cuisine_counts), top_cuisine or available_cuisines[0])
+    if len(cuisine_counts) >= 3:
+        persona = {"title": "味觉漫游家", "summary": f"这一周走过 {len(cuisine_counts)} 种风味，你没有把胃口困在熟悉答案里。"}
+    elif len(orders) >= 3 and top_cuisine:
+        persona = {"title": f"{top_cuisine}坚定派", "summary": f"这一周你把喜欢投给了 {top_cuisine}，稳定的偏爱也很有力量。"}
+    elif orders:
+        persona = {"title": "认真吃饭的人", "summary": "哪怕生活很忙，你仍然为自己留出了好好吃饭的时刻。"}
+    else:
+        persona = {"title": "等待开席的探索者", "summary": "这一周的味觉页面还是空白，下一餐可以从一个新选择开始。"}
+    label = f"{local_start.month}月{local_start.day}日—{(local_end - timedelta(days=1)).month}月{(local_end - timedelta(days=1)).day}日"
+    challenge = {
+        "cuisine": challenge_cuisine,
+        "title": f"下一周，去遇见一次{challenge_cuisine}",
+        "description": "让熟悉之外的味道，为普通的一天留下一点新鲜记忆。",
+        "prompt": f"帮我完成下周饭感任务：想尝试一次{challenge_cuisine}，请结合我的口味推荐一餐",
+    }
+    share_text = None if not orders else f"我的林小呆一周饭感：{persona['title']}。这一周认真吃了 {len(orders)} 餐，走过 {len(cuisine_counts)} 种风味。下周想去遇见一次{challenge_cuisine}。"
+    return {
+        "weekOffset": week_offset,
+        "period": {"start": utc_iso(utc_start), "end": utc_iso(utc_end), "label": label},
+        "hasData": bool(orders),
+        "orderCount": len(orders),
+        "itemCount": item_count,
+        "totalSpent": round(total_spent, 2),
+        "averageOrderValue": round(total_spent / len(orders), 2) if orders else 0,
+        "activeDays": len(active_days),
+        "distinctCuisineCount": len(cuisine_counts),
+        "topCuisine": top_cuisine,
+        "topRestaurant": top_restaurant,
+        "dominantMood": dominant_mood,
+        "topTags": top_tags,
+        "mealMoment": {"key": moment_key, "label": moment_labels[moment_key]} if moment_key else None,
+        "persona": persona,
+        "challenge": challenge,
+        "shareText": share_text,
+    }
+
+
+def dining_room_data(db: Session, room: DiningRoom, user: User) -> dict[str, Any]:
+    candidates = parse_json(room.candidates_json, [])
+    members = db.scalars(select(DiningRoomMember).where(DiningRoomMember.room_id == room.id).order_by(DiningRoomMember.joined_at)).all()
+    votes = db.scalars(select(DiningRoomVote).where(DiningRoomVote.room_id == room.id)).all()
+    counts = [0 for _ in candidates]
+    for vote in votes:
+        if 0 <= vote.candidate_index < len(counts):
+            counts[vote.candidate_index] += 1
+    my_vote = next((vote.candidate_index for vote in votes if vote.user_id == user.id), None)
+    participant_data = []
+    for member in members:
+        member_user = db.get(User, member.user_id)
+        participant_data.append({
+            "id": member.user_id,
+            "name": member_user.name if member_user else "饭搭子",
+            "isHost": member.user_id == room.host_id,
+            "hasVoted": any(vote.user_id == member.user_id for vote in votes),
+        })
+    candidate_data = []
+    for index, candidate in enumerate(candidates):
+        candidate_data.append({**candidate, "votes": counts[index], "index": index})
+    leaders = [index for index, count in enumerate(counts) if count == max(counts, default=0) and count > 0]
+    consensus_index = leaders[0] if len(leaders) == 1 else None
+    return {
+        "id": room.id,
+        "code": room.code,
+        "title": room.title,
+        "status": "expired" if dining_room_expired(room) else room.status,
+        "isHost": room.host_id == user.id,
+        "participants": participant_data,
+        "candidates": candidate_data,
+        "myVote": my_vote,
+        "totalVotes": len(votes),
+        "consensusIndex": consensus_index,
+        "createdAt": utc_iso(room.created_at),
+        "expiresAt": utc_iso(room.expires_at),
+    }
+
+
+def unique_room_code(db: Session) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(12):
+        code = "".join(secrets.choice(alphabet) for _ in range(6))
+        if not db.scalar(select(DiningRoom.id).where(DiningRoom.code == code)):
+            return code
+    raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "暂时无法创建选餐房，请稍后再试")
+
+
+def dining_room_expired(room: DiningRoom) -> bool:
+    now = utc_now()
+    expires_at = room.expires_at
+    if expires_at.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    return expires_at < now
+
+
+def utc_iso(value: datetime) -> str:
+    """Serialize SQLite's naive UTC datetimes consistently for browser clients."""
+    return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat()
 
 
 def seed_database() -> None:
@@ -357,17 +727,17 @@ def seed_database() -> None:
             role="customer",
             preferences_json=json_value({"spiceLevel": "medium", "allergies": [], "dislikedIngredients": [], "budgetMin": 20, "budgetMax": 80, "favoriteCuisines": ["川菜", "日料"]}),
         )
-        merchant = User(
-            id="merchant-demo",
-            name="蜀香小馆店长",
-            email="merchant@linxiaodai.com",
+        catalog_owner = User(
+            id="catalog-demo",
+            name="演示商品目录",
+            email="catalog@internal.linxiaodai",
             password_hash=hash_password("demo123"),
-            role="merchant",
+            role="system",
             preferences_json="{}",
         )
-        db.add_all([customer, merchant])
+        db.add_all([customer, catalog_owner])
         restaurants = [
-            Restaurant(id="r-sichuan", owner_id=merchant.id, name="蜀香小馆", description="川味家常菜，麻辣鲜香，适合想吃辣的一餐。", rating=4.8, rating_count=2356, categories_json=json_value(["川菜", "中餐", "辣味"]), address="朝阳区建国路 88 号", delivery_fee=5, min_order_amount=25, avg_delivery_time=28, opening_hours="10:00-22:00", phone="010-10000001"),
+            Restaurant(id="r-sichuan", owner_id=catalog_owner.id, name="蜀香小馆", description="川味家常菜，麻辣鲜香，适合想吃辣的一餐。", rating=4.8, rating_count=2356, categories_json=json_value(["川菜", "中餐", "辣味"]), address="朝阳区建国路 88 号", delivery_fee=5, min_order_amount=25, avg_delivery_time=28, opening_hours="10:00-22:00", phone="010-10000001"),
             Restaurant(id="r-japanese", name="樱花日料", description="寿司、鳗鱼饭和日式拉面，口味清爽。", rating=4.7, rating_count=1823, categories_json=json_value(["日料", "海鲜", "清淡"]), address="朝阳区光华路 50 号", delivery_fee=8, min_order_amount=35, avg_delivery_time=35, opening_hours="11:00-21:30", phone="010-10000002"),
             Restaurant(id="r-korean", name="韩式炸鸡屋", description="酥脆炸鸡和拌饭，适合多人分享。", rating=4.5, rating_count=1205, categories_json=json_value(["韩餐", "快餐", "炸鸡"]), address="朝阳区望京街 10 号", delivery_fee=4, min_order_amount=20, avg_delivery_time=25, opening_hours="10:30-23:00", phone="010-10000003"),
             Restaurant(id="r-noodle", name="老北京面馆", description="炸酱面、打卤面和家常小菜，实惠快送。", rating=4.4, rating_count=3156, categories_json=json_value(["面食", "中餐", "快餐"]), address="东城区鼓楼大街 25 号", delivery_fee=3, min_order_amount=15, avg_delivery_time=20, opening_hours="08:00-21:00", phone="010-10000004"),
@@ -456,12 +826,8 @@ def current_user(linxiaodai_session: str | None = Cookie(default=None), db: Sess
     user = db.get(User, session.user_id)
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "账户不存在")
-    return user
-
-
-def merchant_user(user: User = Depends(current_user)) -> User:
-    if user.role not in {"merchant", "admin"}:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "需要商家权限")
+    if user.role != "customer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "当前产品仅面向消费者")
     return user
 
 
@@ -496,18 +862,45 @@ class ActionRequest(BaseModel):
     note: str = Field(default="", max_length=300)
 
 
-class MenuInput(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=500)
-    price: float = Field(gt=0, le=9999)
-    category: str = Field(default="主食", max_length=50)
-    spiceLevel: Literal["none", "mild", "medium", "hot"] = "none"
-    stock: int = Field(default=0, ge=0, le=100000)
-    tags: list[str] = Field(default_factory=list)
-
-
 class BlindBoxFeedbackRequest(BaseModel):
     action: Literal["liked", "disliked", "reopened", "platform_opened"]
+
+
+class MealReflectionRequest(BaseModel):
+    mood: Literal["delighted", "comforted", "satisfied", "not_for_me"]
+    tags: list[Literal["flavorful", "just_right", "fresh", "generous", "fast", "surprising", "reorder"]] = Field(default_factory=list, max_length=4)
+    note: str = Field(default="", max_length=160)
+
+
+SAVED_MEAL_OCCASIONS = {"anytime", "workday", "reward", "together", "light"}
+
+
+class SaveMealRequest(BaseModel):
+    restaurantId: str
+    menuItemIds: list[str] = Field(min_length=1, max_length=6)
+    title: str = Field(default="", max_length=80)
+    occasion: str = Field(default="anytime", max_length=30)
+    reason: str = Field(default="", max_length=300)
+    totalPrice: float = Field(default=0, ge=0)
+
+
+class UpdateSavedMealRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=80)
+    occasion: str | None = Field(default=None, max_length=30)
+    restore: bool = False
+
+
+class CreateDiningRoomRequest(BaseModel):
+    title: str = Field(default="今晚吃什么", max_length=80)
+    requirements: dict[str, Any] = Field(default_factory=dict)
+
+
+class JoinDiningRoomRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
+
+
+class DiningRoomVoteRequest(BaseModel):
+    candidateIndex: int = Field(ge=0, le=2)
 
 
 def extract_requirements(message: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -547,53 +940,129 @@ def extract_requirements(message: str, existing: dict[str, Any] | None = None) -
     delivery = re.search(r"(\d+)\s*分钟", message)
     if delivery:
         req["deliveryTimeLimit"] = int(delivery.group(1))
+    if any(word in message for word in ["销量", "月售", "热销", "卖得最好"]):
+        req["sortBy"] = "sales"
+    elif any(word in message for word in ["评分", "好评", "口碑最好"]):
+        req["sortBy"] = "rating"
+    elif any(word in message for word in ["最快", "尽快", "送得快"]):
+        req["sortBy"] = "speed"
+    elif any(word in message for word in ["性价比", "最划算", "实惠"]):
+        req["sortBy"] = "value"
+    if "早餐" in message:
+        req["mealTime"] = "breakfast"
+    elif "午餐" in message or "中饭" in message:
+        req["mealTime"] = "lunch"
+    elif "晚餐" in message or "晚饭" in message:
+        req["mealTime"] = "dinner"
     return req
 
 
-def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, user_id: str | None = None) -> list[dict[str, Any]]:
     restaurants = {restaurant.id: restaurant for restaurant in db.scalars(select(Restaurant).where(Restaurant.is_open.is_(True))).all()}
     items = db.scalars(select(MenuItem).where(MenuItem.is_available.is_(True), MenuItem.stock > 0)).all()
     sources = {source.key: source for source in db.scalars(select(ProviderSource)).all()}
     links = {link.restaurant_id: link for link in db.scalars(select(ProviderRestaurantLink)).all()}
+
+    # Explicit consumer constraints are hard filters. Never surface an item that violates
+    # a stated budget, cuisine, delivery-time or taste requirement.
+    cuisines = requirements.get("cuisines", [])
+    cuisine_matches = {
+        restaurant_id for restaurant_id, restaurant in restaurants.items()
+        if any(cuisine in parse_json(restaurant.categories_json, []) for cuisine in cuisines)
+    }
+    if cuisines:
+        restaurants = {restaurant_id: restaurant for restaurant_id, restaurant in restaurants.items() if restaurant_id in cuisine_matches}
+
+    delivery_limit = requirements.get("deliveryTimeLimit")
+    delivery_matches = {
+        restaurant_id for restaurant_id, restaurant in restaurants.items()
+        if delivery_limit and restaurant.avg_delivery_time <= delivery_limit
+    }
+    if delivery_limit:
+        restaurants = {restaurant_id: restaurant for restaurant_id, restaurant in restaurants.items() if restaurant_id in delivery_matches}
+
+    candidates = [item for item in items if item.restaurant_id in restaurants]
+    avoided = requirements.get("mustAvoid", [])
+    if avoided:
+        candidates = [
+            item for item in candidates
+            if not any(word in " ".join(parse_json(item.ingredients_json, []) + parse_json(item.allergens_json, [])) for word in avoided)
+        ]
+
+    spice = requirements.get("spiceLevel")
+    if spice:
+        candidates = [item for item in candidates if item.spice_level == spice]
+
+    budget = requirements.get("budget")
+    if budget:
+        candidates = [
+            item for item in candidates
+            if budget.get("min", 0) <= item.price <= budget["max"]
+        ]
+
     ranked: list[tuple[float, MenuItem, Restaurant]] = []
-    for item in items:
+    learned_cuisines: dict[str, float] = {}
+    if user_id:
+        reflections = db.scalars(select(MealReflection).where(MealReflection.user_id == user_id)).all()
+        for reflection in reflections:
+            order = db.get(Order, reflection.order_id)
+            restaurant = db.get(Restaurant, order.restaurant_id) if order else None
+            if not restaurant:
+                continue
+            weight = {"delighted": 8.0, "comforted": 6.0, "satisfied": 3.0, "not_for_me": -9.0}.get(reflection.mood, 0.0)
+            if "reorder" in parse_json(reflection.tags_json, []):
+                weight += 5.0
+            for category in parse_json(restaurant.categories_json, []):
+                learned_cuisines[category] = learned_cuisines.get(category, 0.0) + weight
+    for item in candidates:
         restaurant = restaurants.get(item.restaurant_id)
         if not restaurant:
             continue
         score = item.rating * 12 + restaurant.rating * 10 + min(item.sales_count / 300, 10)
+        score += max((learned_cuisines.get(category, 0.0) for category in parse_json(restaurant.categories_json, [])), default=0.0)
         if requirements.get("budget"):
-            score += 18 if item.price + restaurant.delivery_fee <= requirements["budget"]["max"] else -18
+            score += 18
         if requirements.get("cuisines") and any(c in parse_json(restaurant.categories_json, []) for c in requirements["cuisines"]):
             score += 20
-        spice = requirements.get("spiceLevel")
         if spice == item.spice_level:
             score += 14
         elif spice == "none" and item.spice_level != "none":
             score -= 22
-        ingredients = " ".join(parse_json(item.ingredients_json, []) + parse_json(item.allergens_json, []))
-        if any(word in ingredients for word in requirements.get("mustAvoid", [])):
-            score -= 80
         if requirements.get("deliveryTimeLimit") and restaurant.avg_delivery_time <= requirements["deliveryTimeLimit"]:
             score += 10
         ranked.append((score, item, restaurant))
+    sort_by = requirements.get("sortBy")
+    if sort_by == "sales":
+        ranked.sort(key=lambda row: (row[1].sales_count, row[1].rating, row[0]), reverse=True)
+    elif sort_by == "rating":
+        ranked.sort(key=lambda row: (row[1].rating, row[2].rating, row[1].sales_count), reverse=True)
+    elif sort_by == "speed":
+        ranked.sort(key=lambda row: (row[2].avg_delivery_time, -row[0]))
+    elif sort_by == "value":
+        ranked.sort(key=lambda row: (row[1].price / max(row[1].rating, 0.1), -row[1].sales_count))
+    else:
+        ranked.sort(key=lambda row: row[0], reverse=True)
+
     results: list[dict[str, Any]] = []
     used: set[str] = set()
-    for score, item, restaurant in sorted(ranked, key=lambda row: row[0], reverse=True):
+    for score, item, restaurant in ranked:
         if restaurant.id in used:
             continue
-        related = [candidate for _, candidate, related_restaurant in ranked if related_restaurant.id == restaurant.id][:2]
-        if item not in related:
-            related.insert(0, item)
-        total = round(sum(candidate.price for candidate in related), 2)
         link = links.get(restaurant.id)
         source = sources.get(link.provider_key if link else "demo")
+        reason_prefix = {
+            "sales": f"销量优先：{item.name} 已售 {item.sales_count} 份",
+            "rating": f"口碑优先：{item.name} 评分 {item.rating}",
+            "speed": f"送达优先：预计 {restaurant.avg_delivery_time} 分钟",
+            "value": f"性价比优先：{item.name} ¥{item.price:g}",
+        }.get(sort_by, f"综合推荐 {item.name}")
         results.append({
             "restaurant": restaurant_data(restaurant),
-            "menuItems": [menu_data(candidate) for candidate in related],
-            "totalPrice": total,
+            "menuItems": [menu_data(item)],
+            "totalPrice": item.price,
             "deliveryFee": restaurant.delivery_fee,
             "estimatedDeliveryTime": restaurant.avg_delivery_time,
-            "reason": f"{restaurant.name}评分 {restaurant.rating}，预计 {restaurant.avg_delivery_time} 分钟送达，推荐 {item.name}",
+            "reason": f"{reason_prefix}，商品价 ¥{item.price:g}，配送费 ¥{restaurant.delivery_fee:g}",
             "score": round(max(score, 0), 1),
             "heatScore": min(99, round(item.sales_count / 35 + item.rating * 12)),
             "dataStatus": "synced" if source and source.status == "authorized" else "demo",
@@ -627,6 +1096,8 @@ def login(payload: Credentials, response: Response, db: Session = Depends(get_db
     user = db.scalar(select(User).where(User.email == payload.email.lower().strip()))
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "邮箱或密码不正确")
+    if user.role != "customer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "林小呆现在仅面向消费者，请使用用户账号")
     token = secrets.token_urlsafe(48)
     db.add(UserSession(token=token, user_id=user.id, expires_at=utc_now() + timedelta(days=SESSION_DAYS)))
     db.commit()
@@ -691,24 +1162,6 @@ def list_provider_sources(user: User = Depends(current_user), db: Session = Depe
     return {"success": True, "data": payload}
 
 
-@app.post("/api/providers/{provider_key}/sync")
-def sync_provider_source(provider_key: str, user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    source = db.get(ProviderSource, provider_key)
-    if not source:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "数据源不存在")
-    if source.status != "demo":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "授权数据源需要使用对应平台适配器同步")
-    source.last_synced_at = utc_now()
-    source.last_error = None
-    links = db.scalars(
-        select(ProviderRestaurantLink).where(ProviderRestaurantLink.provider_key == provider_key)
-    ).all()
-    for link in links:
-        link.last_synced_at = source.last_synced_at
-    db.commit()
-    return {"success": True, "data": provider_data(source, len(links))}
-
-
 @app.get("/api/chat")
 def list_or_get_conversations(id: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     if id:
@@ -731,10 +1184,13 @@ def chat(payload: ChatRequest, user: User = Depends(current_user), db: Session =
             conversation = Conversation(id=new_id(), user_id=user.id, title=payload.message[:24])
             db.add(conversation)
         requirements = extract_requirements(payload.message, parse_json(conversation.requirements_json, {}))
-        recs = recommendations(db, requirements)
-        reply = "我按人数、预算、口味和配送时间筛选了可下单的餐厅。"
+        recs = recommendations(db, requirements, user_id=user.id)
+        reply = "我已按商品价格、口味、忌口与配送条件进行了严格筛选。"
         if recs:
-            reply += f" 首推 {recs[0]['restaurant']['name']} 的 {recs[0]['menuItems'][0]['name']}。"
+            sort_copy = {"sales": "销量", "rating": "评分", "speed": "送达速度", "value": "性价比"}.get(requirements.get("sortBy"), "综合匹配度")
+            reply += f" 按{sort_copy}首推 {recs[0]['restaurant']['name']} 的 {recs[0]['menuItems'][0]['name']}。"
+        else:
+            reply += " 暂时没有同时满足所有条件的可售商品，可以尝试稍微放宽预算或配送时间。"
         user_message = Message(id=new_id(), conversation_id=conversation.id, role="user", content=payload.message)
         assistant_message = Message(id=new_id(), conversation_id=conversation.id, role="assistant", content=reply, recommendations_json=json_value(recs))
         conversation.requirements_json = json_value(requirements)
@@ -746,7 +1202,7 @@ def chat(payload: ChatRequest, user: User = Depends(current_user), db: Session =
 
 @app.post("/api/blind-box")
 def blind_box(requirements: dict[str, Any], user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    recs = recommendations(db, requirements, limit=5)
+    recs = recommendations(db, requirements, limit=5, user_id=user.id)
     if not recs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "没有符合条件的可售菜品")
     primary_index = secrets.randbelow(min(3, len(recs)))
@@ -799,6 +1255,11 @@ def blind_box_history(user: User = Depends(current_user), db: Session = Depends(
 @app.get("/api/orders")
 def list_orders(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.scalars(select(Order).where(Order.customer_id == user.id).order_by(Order.created_at.desc())).all()
+    changed = False
+    for row in rows:
+        changed = refresh_demo_order(db, row) or changed
+    if changed:
+        db.commit()
     return {"success": True, "data": [order_data(db, row, include_events=True) for row in rows]}
 
 
@@ -850,7 +1311,7 @@ def update_customer_order(order_id: str, payload: ActionRequest, user: User = De
                 item.sales_count += line.quantity
             order.status = "paid"
             order.updated_at = utc_now()
-            add_order_event(db, order, user.id, "模拟支付成功，等待商家接单")
+            add_order_event(db, order, user.id, "演示支付成功，正在向履约渠道提交订单")
         elif payload.action == "cancel":
             if order.status not in {"pending_payment", "paid"}:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "当前订单不能取消")
@@ -863,71 +1324,209 @@ def update_customer_order(order_id: str, payload: ActionRequest, user: User = De
         return {"success": True, "data": order_data(db, order, include_events=True)}
 
 
-def merchant_restaurant(db: Session, user: User) -> Restaurant:
-    restaurant = db.scalar(select(Restaurant).where(Restaurant.owner_id == user.id))
-    if not restaurant:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "商家尚未绑定餐厅")
-    return restaurant
-
-
-@app.get("/api/merchant/dashboard")
-def merchant_dashboard(user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    restaurant = merchant_restaurant(db, user)
-    orders = db.scalars(select(Order).where(Order.restaurant_id == restaurant.id).order_by(Order.created_at.desc())).all()
-    today = utc_now().date()
-    today_orders = [order for order in orders if order.created_at.date() == today]
-    return {"success": True, "data": {"restaurant": restaurant_data(restaurant), "metrics": {"todayOrders": len(today_orders), "todayRevenue": round(sum(order.total for order in today_orders if order.status != "cancelled"), 2), "pendingOrders": sum(order.status == "paid" for order in orders), "activeOrders": sum(order.status in {"accepted", "preparing", "ready_for_pickup", "delivering"} for order in orders)}, "recentOrders": [order_data(db, order, include_events=True) for order in orders[:10]]}}
-
-
-@app.get("/api/merchant/orders")
-def merchant_orders(user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    restaurant = merchant_restaurant(db, user)
-    orders = db.scalars(select(Order).where(Order.restaurant_id == restaurant.id).order_by(Order.created_at.desc())).all()
-    return {"success": True, "data": [order_data(db, order, include_events=True) for order in orders]}
-
-
-@app.post("/api/merchant/orders/{order_id}")
-def merchant_update_order(order_id: str, payload: ActionRequest, user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+@app.post("/api/orders/{order_id}/reflection", status_code=status.HTTP_201_CREATED)
+def save_meal_reflection(order_id: str, payload: MealReflectionRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     with write_lock:
-        restaurant = merchant_restaurant(db, user)
         order = db.get(Order, order_id)
-        if not order or order.restaurant_id != restaurant.id:
+        if not order or order.customer_id != user.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "订单不存在")
-        if payload.action not in ORDER_STATUSES or payload.action not in TRANSITIONS.get(order.status, set()):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "不符合订单状态流转规则")
-        order.status = payload.action
-        order.updated_at = utc_now()
-        add_order_event(db, order, user.id, payload.note or "商家更新订单状态")
+        if order.status != "completed":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "订单完成后才能记录回味")
+        reflection = db.scalar(select(MealReflection).where(MealReflection.order_id == order.id))
+        is_new_reflection = reflection is None
+        if reflection:
+            reflection.mood = payload.mood
+            reflection.tags_json = json_value(list(dict.fromkeys(payload.tags)))
+            reflection.note = payload.note.strip()
+        else:
+            reflection = MealReflection(
+                id=new_id(),
+                order_id=order.id,
+                user_id=user.id,
+                mood=payload.mood,
+                tags_json=json_value(list(dict.fromkeys(payload.tags))),
+                note=payload.note.strip(),
+            )
+            db.add(reflection)
+
+        restaurant = db.get(Restaurant, order.restaurant_id)
+        preferences = parse_json(user.preferences_json, {})
+        favorite_cuisines = list(preferences.get("favoriteCuisines", []))
+        if payload.mood in {"delighted", "comforted"} and restaurant:
+            for category in parse_json(restaurant.categories_json, []):
+                if category not in favorite_cuisines:
+                    favorite_cuisines.append(category)
+        preferences["favoriteCuisines"] = favorite_cuisines[:8]
+        preferences["tasteCheckInCount"] = int(preferences.get("tasteCheckInCount", 0)) + (1 if is_new_reflection else 0)
+        preferences["lastMealMood"] = payload.mood
+        preferences["lastTasteTags"] = list(dict.fromkeys(payload.tags))
+        user.preferences_json = json_value(preferences)
         db.commit()
-        return {"success": True, "data": order_data(db, order, include_events=True)}
+
+        count = db.scalar(select(func.count(MealReflection.id)).where(MealReflection.user_id == user.id)) or 0
+        return {"success": True, "data": {"order": order_data(db, order, include_events=True), "tasteProfile": taste_profile_data(db, user, count)}}
 
 
-@app.get("/api/merchant/menu-items")
-def merchant_menu_items(user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    restaurant = merchant_restaurant(db, user)
-    rows = db.scalars(select(MenuItem).where(MenuItem.restaurant_id == restaurant.id).order_by(MenuItem.category, MenuItem.name)).all()
-    return {"success": True, "data": [menu_data(row) for row in rows]}
+@app.get("/api/user/taste-profile")
+def taste_profile(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    count = db.scalar(select(func.count(MealReflection.id)).where(MealReflection.user_id == user.id)) or 0
+    return {"success": True, "data": taste_profile_data(db, user, count)}
 
 
-@app.post("/api/merchant/menu-items", status_code=status.HTTP_201_CREATED)
-def merchant_create_menu_item(payload: MenuInput, user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    restaurant = merchant_restaurant(db, user)
-    item = MenuItem(id=new_id(), restaurant_id=restaurant.id, name=payload.name, description=payload.description, price=payload.price, category=payload.category, spice_level=payload.spiceLevel, stock=payload.stock, tags_json=json_value(payload.tags), is_available=payload.stock > 0)
-    db.add(item)
-    db.commit()
-    return {"success": True, "data": menu_data(item)}
+@app.get("/api/user/taste-passport")
+def taste_passport(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {"success": True, "data": taste_passport_data(db, user)}
 
 
-@app.patch("/api/merchant/menu-items/{item_id}")
-def merchant_update_menu_item(item_id: str, payload: MenuInput, user: User = Depends(merchant_user), db: Session = Depends(get_db)) -> dict[str, Any]:
-    restaurant = merchant_restaurant(db, user)
-    item = db.get(MenuItem, item_id)
-    if not item or item.restaurant_id != restaurant.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "菜品不存在")
-    item.name, item.description, item.price, item.category = payload.name, payload.description, payload.price, payload.category
-    item.spice_level, item.stock, item.tags_json, item.is_available = payload.spiceLevel, payload.stock, json_value(payload.tags), payload.stock > 0
-    db.commit()
-    return {"success": True, "data": menu_data(item)}
+@app.get("/api/user/weekly-taste-recap")
+def weekly_taste_recap(
+    week_offset: int = Query(default=0, alias="weekOffset", ge=0, le=12),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return {"success": True, "data": weekly_taste_recap_data(db, user, week_offset)}
+
+
+@app.get("/api/saved-meals")
+def list_saved_meals(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    rows = db.scalars(select(SavedMeal).where(SavedMeal.user_id == user.id, SavedMeal.deleted_at.is_(None)).order_by(SavedMeal.updated_at.desc())).all()
+    return {"success": True, "data": [saved_meal_data(db, row) for row in rows]}
+
+
+@app.post("/api/saved-meals", status_code=status.HTTP_201_CREATED)
+def create_saved_meal(payload: SaveMealRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    with write_lock:
+        occasion = payload.occasion if payload.occasion in SAVED_MEAL_OCCASIONS else "anytime"
+        restaurant = db.get(Restaurant, payload.restaurantId)
+        unique_item_ids = list(dict.fromkeys(payload.menuItemIds))
+        items = db.scalars(select(MenuItem).where(MenuItem.id.in_(unique_item_ids), MenuItem.restaurant_id == payload.restaurantId)).all()
+        if not restaurant or len(items) != len(unique_item_ids):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "收藏内容包含无效餐厅或菜品")
+        existing = db.scalar(select(SavedMeal).where(SavedMeal.user_id == user.id, SavedMeal.restaurant_id == restaurant.id, SavedMeal.menu_item_ids_json == json_value(unique_item_ids), SavedMeal.deleted_at.is_(None)))
+        if existing:
+            return {"success": True, "data": saved_meal_data(db, existing)}
+        saved = SavedMeal(
+            id=new_id(), user_id=user.id, restaurant_id=restaurant.id,
+            menu_item_ids_json=json_value(unique_item_ids), title=payload.title.strip() or f"{restaurant.name}心动搭配",
+            occasion=occasion, reason_snapshot=payload.reason.strip(), total_price_snapshot=payload.totalPrice,
+        )
+        db.add(saved); db.commit()
+        return {"success": True, "data": saved_meal_data(db, saved)}
+
+
+@app.patch("/api/saved-meals/{saved_id}")
+def update_saved_meal(saved_id: str, payload: UpdateSavedMealRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    with write_lock:
+        saved = db.get(SavedMeal, saved_id)
+        if not saved or saved.user_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "没有找到这份收藏")
+        if payload.restore:
+            active_duplicate = db.scalar(select(SavedMeal).where(
+                SavedMeal.id != saved.id,
+                SavedMeal.user_id == user.id,
+                SavedMeal.restaurant_id == saved.restaurant_id,
+                SavedMeal.menu_item_ids_json == saved.menu_item_ids_json,
+                SavedMeal.deleted_at.is_(None),
+            ))
+            if active_duplicate:
+                return {"success": True, "data": saved_meal_data(db, active_duplicate)}
+            saved.deleted_at = None
+        if payload.title is not None:
+            saved.title = payload.title.strip() or saved.title
+        if payload.occasion is not None:
+            if payload.occasion not in SAVED_MEAL_OCCASIONS:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "收藏场景不支持")
+            saved.occasion = payload.occasion
+        saved.updated_at = utc_now(); db.commit()
+        return {"success": True, "data": saved_meal_data(db, saved)}
+
+
+@app.delete("/api/saved-meals/{saved_id}")
+def delete_saved_meal(saved_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    with write_lock:
+        saved = db.get(SavedMeal, saved_id)
+        if not saved or saved.user_id != user.id or saved.deleted_at is not None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "没有找到这份收藏")
+        saved.deleted_at = utc_now(); saved.updated_at = utc_now(); db.commit()
+        return {"success": True, "data": {"id": saved.id, "deleted": True}}
+
+
+@app.post("/api/dining-rooms", status_code=status.HTTP_201_CREATED)
+def create_dining_room(payload: CreateDiningRoomRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    with write_lock:
+        recs = recommendations(db, payload.requirements, limit=3, user_id=user.id)
+        if len(recs) < 2:
+            recs = recommendations(db, {}, limit=3, user_id=user.id)
+        if len(recs) < 2:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "当前可选餐厅不足，暂时无法创建选餐房")
+        candidates = [
+            {
+                "restaurant": rec["restaurant"],
+                "menuItems": rec["menuItems"],
+                "totalPrice": rec["totalPrice"],
+                "deliveryFee": rec["deliveryFee"],
+                "estimatedDeliveryTime": rec["estimatedDeliveryTime"],
+                "reason": rec["reason"],
+            }
+            for rec in recs[:3]
+        ]
+        room = DiningRoom(
+            id=new_id(),
+            code=unique_room_code(db),
+            host_id=user.id,
+            title=payload.title.strip() or "今晚吃什么",
+            requirements_json=json_value(payload.requirements),
+            candidates_json=json_value(candidates),
+            expires_at=utc_now() + timedelta(hours=24),
+        )
+        db.add(room)
+        db.add(DiningRoomMember(id=new_id(), room_id=room.id, user_id=user.id))
+        db.commit()
+        return {"success": True, "data": dining_room_data(db, room, user)}
+
+
+@app.post("/api/dining-rooms/join")
+def join_dining_room(payload: JoinDiningRoomRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    with write_lock:
+        room = db.scalar(select(DiningRoom).where(DiningRoom.code == payload.code.strip().upper()))
+        if not room or dining_room_expired(room):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "选餐房不存在或已经过期")
+        member = db.scalar(select(DiningRoomMember).where(DiningRoomMember.room_id == room.id, DiningRoomMember.user_id == user.id))
+        if not member:
+            db.add(DiningRoomMember(id=new_id(), room_id=room.id, user_id=user.id))
+            db.commit()
+        return {"success": True, "data": dining_room_data(db, room, user)}
+
+
+@app.get("/api/dining-rooms/{room_id}")
+def get_dining_room(room_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    room = db.get(DiningRoom, room_id)
+    member = db.scalar(select(DiningRoomMember).where(DiningRoomMember.room_id == room_id, DiningRoomMember.user_id == user.id)) if room else None
+    if not room or not member:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "你还没有加入这个选餐房")
+    return {"success": True, "data": dining_room_data(db, room, user)}
+
+
+@app.post("/api/dining-rooms/{room_id}/vote")
+def vote_dining_room(room_id: str, payload: DiningRoomVoteRequest, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
+    with write_lock:
+        room = db.get(DiningRoom, room_id)
+        member = db.scalar(select(DiningRoomMember).where(DiningRoomMember.room_id == room_id, DiningRoomMember.user_id == user.id)) if room else None
+        candidates = parse_json(room.candidates_json, []) if room else []
+        if not room or not member:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "你还没有加入这个选餐房")
+        if dining_room_expired(room) or room.status != "open":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "这个选餐房已经结束")
+        if payload.candidateIndex >= len(candidates):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "候选餐厅不存在")
+        vote = db.scalar(select(DiningRoomVote).where(DiningRoomVote.room_id == room_id, DiningRoomVote.user_id == user.id))
+        if vote:
+            vote.candidate_index = payload.candidateIndex
+            vote.updated_at = utc_now()
+        else:
+            db.add(DiningRoomVote(id=new_id(), room_id=room_id, user_id=user.id, candidate_index=payload.candidateIndex))
+        db.commit()
+        return {"success": True, "data": dining_room_data(db, room, user)}
 
 
 @app.exception_handler(HTTPException)
