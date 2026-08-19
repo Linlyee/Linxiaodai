@@ -12,9 +12,9 @@ from datetime import datetime, timedelta, timezone
 from threading import RLock
 from typing import Any, Literal
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -264,6 +264,21 @@ class ProviderRestaurantLink(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class OrderFulfillmentSnapshot(Base):
+    __tablename__ = "order_fulfillment_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id"), unique=True, index=True)
+    provider_key: Mapped[str] = mapped_column(ForeignKey("provider_sources.key"), index=True)
+    external_order_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tracking_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    rider_name: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    rider_vehicle: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    rider_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    estimated_arrival_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: utc_now())
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -353,7 +368,7 @@ def provider_data(source: ProviderSource, restaurant_count: int) -> dict[str, An
         "name": source.name,
         "status": source.status,
         "syncMode": source.sync_mode,
-        "lastSyncedAt": source.last_synced_at.isoformat() if source.last_synced_at else None,
+        "lastSyncedAt": utc_iso(source.last_synced_at) if source.last_synced_at else None,
         "lastError": source.last_error,
         "restaurantCount": restaurant_count,
         "orderRedirectEnabled": source.status == "authorized",
@@ -387,20 +402,103 @@ def saved_meal_data(db: Session, saved: SavedMeal) -> dict[str, Any]:
     }
 
 
-def order_fulfillment_data(db: Session, restaurant_id: str) -> dict[str, Any]:
-    link = db.scalar(
+def order_provider_data(
+    db: Session,
+    restaurant_id: str,
+    preferred_provider_key: str | None = None,
+) -> tuple[ProviderSource | None, ProviderRestaurantLink | None]:
+    links = db.scalars(
         select(ProviderRestaurantLink).where(ProviderRestaurantLink.restaurant_id == restaurant_id)
+    ).all()
+    candidates = [(db.get(ProviderSource, link.provider_key), link) for link in links]
+    if preferred_provider_key:
+        preferred = next(
+            ((source, link) for source, link in candidates if source and source.key == preferred_provider_key),
+            None,
+        )
+        if preferred:
+            return preferred
+    authorized = next(((source, link) for source, link in candidates if source and source.status == "authorized"), None)
+    return authorized or (candidates[0] if candidates else (None, None))
+
+
+ORDER_DELIVERY_COPY: dict[str, tuple[int, str, str | None]] = {
+    "pending_payment": (0, "完成支付后，门店才会开始处理", "提交至履约渠道"),
+    "paid": (8, "订单正在安全提交至履约渠道", "等待渠道确认"),
+    "accepted": (24, "门店已接单，马上开始准备餐品", "开始制作"),
+    "preparing": (46, "餐品正在制作，完成后会匹配配送员", "等待取餐"),
+    "ready_for_pickup": (64, "餐品已经备好，正在匹配配送员", "配送员取餐"),
+    "picked_up": (78, "配送员已取餐，正在前往收货地址", "开始配送"),
+    "delivering": (90, "配送员正在送往收货地址", "送达"),
+    "completed": (100, "订单已经送达，祝你用餐愉快", None),
+    "cancelled": (0, "订单已取消，不会继续履约", None),
+}
+
+
+def order_fulfillment_data(
+    db: Session,
+    order: Order,
+    restaurant: Restaurant | None,
+    events: list[OrderEvent],
+) -> dict[str, Any]:
+    snapshot = db.scalar(select(OrderFulfillmentSnapshot).where(OrderFulfillmentSnapshot.order_id == order.id))
+    source, link = order_provider_data(
+        db,
+        order.restaurant_id,
+        snapshot.provider_key if snapshot else None,
     )
-    source = db.get(ProviderSource, link.provider_key) if link else None
     is_live = bool(source and source.status == "authorized")
+    paid_event = next((event for event in events if event.status == "paid"), None)
+    eta_base = paid_event.created_at if paid_event else order.updated_at
+    if eta_base.tzinfo is None:
+        eta_base = eta_base.replace(tzinfo=timezone.utc)
+    terminal = order.status in {"completed", "cancelled", "pending_payment"}
+    estimated_arrival_at = (
+        None
+        if terminal
+        else snapshot.estimated_arrival_at
+        if snapshot and snapshot.estimated_arrival_at
+        else eta_base + timedelta(minutes=restaurant.avg_delivery_time if restaurant else 30)
+    )
+    if estimated_arrival_at and estimated_arrival_at.tzinfo is None:
+        estimated_arrival_at = estimated_arrival_at.replace(tzinfo=timezone.utc)
+    progress_percent, current_action, next_milestone = ORDER_DELIVERY_COPY.get(
+        order.status,
+        (0, "正在读取最新履约状态", None),
+    )
+    is_delayed = bool(estimated_arrival_at and utc_now() > estimated_arrival_at)
+    rider = None
+    if snapshot and order.status in {"picked_up", "delivering"} and any((snapshot.rider_name, snapshot.rider_vehicle, snapshot.rider_status)):
+        rider = {
+            "displayName": snapshot.rider_name or "平台配送员",
+            "vehicle": snapshot.rider_vehicle or "平台配送",
+            "status": snapshot.rider_status or current_action,
+        }
+    elif not is_live and order.status in {"picked_up", "delivering"}:
+        rider = {
+            "displayName": "演示配送员",
+            "vehicle": "模拟配送",
+            "status": "已取餐，准备出发" if order.status == "picked_up" else "正送往收货地址",
+        }
     return {
         "providerKey": source.key if source else "demo",
         "providerName": source.name if source else "本地演示数据",
         "mode": "platform" if is_live else "demo",
         "isLive": is_live,
         "trackingMode": "provider_callback" if is_live else "simulated",
-        "trackingUrl": None,
+        "trackingUrl": (
+            snapshot.tracking_url
+            if snapshot and snapshot.tracking_url
+            else link.order_url if is_live and link else None
+        ),
         "notice": "订单与配送进度由平台实时同步" if is_live else "当前为演示履约，不会发起真实扣款或配送",
+        "lastSyncedAt": utc_iso(snapshot.last_synced_at) if snapshot else utc_iso(order.updated_at),
+        "estimatedArrivalAt": utc_iso(estimated_arrival_at) if estimated_arrival_at else None,
+        "progressPercent": progress_percent,
+        "currentAction": current_action,
+        "nextMilestone": next_milestone,
+        "delayStatus": "delayed" if is_delayed else "on_time",
+        "rider": rider,
     }
 
 
@@ -418,7 +516,8 @@ DEMO_ORDER_STAGES = [
 def refresh_demo_order(db: Session, order: Order) -> bool:
     if order.status in {"pending_payment", "cancelled", "completed"}:
         return False
-    if order_fulfillment_data(db, order.restaurant_id)["isLive"]:
+    source, _ = order_provider_data(db, order.restaurant_id)
+    if source and source.status == "authorized":
         return False
     paid_event = db.scalar(
         select(OrderEvent)
@@ -447,6 +546,7 @@ def order_data(db: Session, order: Order, include_events: bool = False) -> dict[
     restaurant = db.get(Restaurant, order.restaurant_id)
     rows = db.scalars(select(OrderItem).where(OrderItem.order_id == order.id)).all()
     reflection = db.scalar(select(MealReflection).where(MealReflection.order_id == order.id))
+    events = db.scalars(select(OrderEvent).where(OrderEvent.order_id == order.id).order_by(OrderEvent.created_at)).all()
     data: dict[str, Any] = {
         "id": order.id,
         "restaurantId": order.restaurant_id,
@@ -462,24 +562,38 @@ def order_data(db: Session, order: Order, include_events: bool = False) -> dict[
         "estimatedDeliveryTime": restaurant.avg_delivery_time if restaurant else 30,
         "address": order.address_snapshot,
         "note": order.note,
-        "fulfillment": order_fulfillment_data(db, order.restaurant_id),
-        "createdAt": order.created_at.isoformat(),
-        "updatedAt": order.updated_at.isoformat(),
+        "fulfillment": order_fulfillment_data(db, order, restaurant, list(events)),
+        "createdAt": utc_iso(order.created_at),
+        "updatedAt": utc_iso(order.updated_at),
         "reflection": {
             "mood": reflection.mood,
             "tags": parse_json(reflection.tags_json, []),
             "note": reflection.note,
-            "createdAt": reflection.created_at.isoformat(),
+            "createdAt": utc_iso(reflection.created_at),
         } if reflection else None,
     }
     if include_events:
-        events = db.scalars(select(OrderEvent).where(OrderEvent.order_id == order.id).order_by(OrderEvent.created_at)).all()
-        data["events"] = [{"status": event.status, "note": event.note, "createdAt": event.created_at.isoformat()} for event in events]
+        data["events"] = [{"status": event.status, "note": event.note, "createdAt": utc_iso(event.created_at)} for event in events]
     return data
 
 
-def add_order_event(db: Session, order: Order, actor_id: str | None, note: str = "") -> None:
-    db.add(OrderEvent(id=new_id(), order_id=order.id, status=order.status, actor_id=actor_id, note=note))
+def add_order_event(
+    db: Session,
+    order: Order,
+    actor_id: str | None,
+    note: str = "",
+    created_at: datetime | None = None,
+) -> None:
+    db.add(
+        OrderEvent(
+            id=new_id(),
+            order_id=order.id,
+            status=order.status,
+            actor_id=actor_id,
+            note=note,
+            created_at=created_at or utc_now(),
+        )
+    )
 
 
 def taste_profile_data(db: Session, user: User, check_in_count: int | None = None) -> dict[str, Any]:
@@ -866,6 +980,39 @@ class ActionRequest(BaseModel):
     note: str = Field(default="", max_length=300)
 
 
+class ProviderOrderCallback(BaseModel):
+    status: Literal["accepted", "preparing", "ready_for_pickup", "picked_up", "delivering", "completed", "cancelled"]
+    externalOrderId: str | None = Field(default=None, max_length=120)
+    trackingUrl: str | None = Field(default=None, max_length=1000)
+    estimatedArrivalAt: datetime | None = None
+    riderName: str | None = Field(default=None, max_length=80)
+    riderVehicle: str | None = Field(default=None, max_length=80)
+    riderStatus: str | None = Field(default=None, max_length=120)
+    note: str = Field(default="", max_length=300)
+    occurredAt: datetime | None = None
+
+
+PROVIDER_ORDER_STATUS_RANK = {
+    "paid": 0,
+    "accepted": 1,
+    "preparing": 2,
+    "ready_for_pickup": 3,
+    "picked_up": 4,
+    "delivering": 5,
+    "completed": 6,
+}
+
+PROVIDER_ORDER_STATUS_LABEL = {
+    "accepted": "渠道已确认订单",
+    "preparing": "餐品正在准备中",
+    "ready_for_pickup": "餐品已备好，等待取餐",
+    "picked_up": "配送员已取餐",
+    "delivering": "配送员正在送往收货地址",
+    "completed": "订单已送达",
+    "cancelled": "履约渠道已取消订单",
+}
+
+
 class BlindBoxFeedbackRequest(BaseModel):
     action: Literal["liked", "disliked", "reopened", "platform_opened"]
 
@@ -975,7 +1122,17 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
     restaurants = {restaurant.id: restaurant for restaurant in db.scalars(select(Restaurant).where(Restaurant.is_open.is_(True))).all()}
     items = db.scalars(select(MenuItem).where(MenuItem.is_available.is_(True), MenuItem.stock > 0)).all()
     sources = {source.key: source for source in db.scalars(select(ProviderSource)).all()}
-    links = {link.restaurant_id: link for link in db.scalars(select(ProviderRestaurantLink)).all()}
+    links: dict[str, ProviderRestaurantLink] = {}
+    for link in db.scalars(select(ProviderRestaurantLink)).all():
+        existing = links.get(link.restaurant_id)
+        existing_source = sources.get(existing.provider_key) if existing else None
+        candidate_source = sources.get(link.provider_key)
+        if not existing or (
+            candidate_source
+            and candidate_source.status == "authorized"
+            and (not existing_source or existing_source.status != "authorized")
+        ):
+            links[link.restaurant_id] = link
 
     # Explicit consumer constraints are hard filters. Never surface an item that violates
     # a stated budget, cuisine, delivery-time or taste requirement.
@@ -1099,7 +1256,7 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
             "score": round(max(score, 0), 1),
             "heatScore": min(99, round(item.sales_count / 35 + item.rating * 12)),
             "dataStatus": "synced" if source and source.status == "authorized" else "demo",
-            "syncedAt": synced_at.isoformat() if synced_at else None,
+            "syncedAt": utc_iso(synced_at) if synced_at else None,
             "pricing": {
                 "itemPrice": item.price,
                 "originalItemPrice": original_price,
@@ -1113,7 +1270,7 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
             "freshness": {
                 "status": freshness_status,
                 "label": freshness_label,
-                "syncedAt": synced_at.isoformat() if synced_at else None,
+                "syncedAt": utc_iso(synced_at) if synced_at else None,
             },
             "provider": {
                 "key": source.key if source else "demo",
@@ -1128,7 +1285,7 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
 
 
 def message_data(message: Message) -> dict[str, Any]:
-    data = {"id": message.id, "role": message.role, "content": message.content, "createdAt": message.created_at.isoformat()}
+    data = {"id": message.id, "role": message.role, "content": message.content, "createdAt": utc_iso(message.created_at)}
     if message.recommendations_json:
         data["recommendations"] = parse_json(message.recommendations_json, [])
     return data
@@ -1210,6 +1367,127 @@ def list_provider_sources(user: User = Depends(current_user), db: Session = Depe
     return {"success": True, "data": payload}
 
 
+@app.post("/api/provider-callbacks/{provider_key}/orders/{order_id}")
+async def receive_provider_order_callback(
+    provider_key: str,
+    order_id: str,
+    request: Request,
+    x_provider_signature: str | None = Header(default=None, alias="X-Provider-Signature"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    env_key = re.sub(r"[^A-Za-z0-9]", "_", provider_key).upper()
+    secret = os.getenv(f"PROVIDER_{env_key}_WEBHOOK_SECRET") or os.getenv("PROVIDER_WEBHOOK_SECRET")
+    if not secret:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "配送回调密钥未配置")
+
+    raw_body = await request.body()
+    supplied_signature = (x_provider_signature or "").strip().lower()
+    if supplied_signature.startswith("sha256="):
+        supplied_signature = supplied_signature.removeprefix("sha256=")
+    expected_signature = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    if not supplied_signature or not hmac.compare_digest(supplied_signature, expected_signature):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "配送回调签名无效")
+
+    try:
+        payload = ProviderOrderCallback.model_validate_json(raw_body)
+    except ValidationError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "配送回调数据格式无效") from error
+
+    with write_lock:
+        source = db.get(ProviderSource, provider_key)
+        if not source or source.status != "authorized":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "配送渠道尚未授权")
+        order = db.get(Order, order_id)
+        if not order:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "订单不存在")
+        link = db.scalar(
+            select(ProviderRestaurantLink).where(
+                ProviderRestaurantLink.provider_key == provider_key,
+                ProviderRestaurantLink.restaurant_id == order.restaurant_id,
+            )
+        )
+        if not link:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "配送渠道与当前门店未绑定")
+
+        received_at = utc_now()
+        callback_time = payload.occurredAt or received_at
+        callback_time = (
+            callback_time.replace(tzinfo=timezone.utc)
+            if callback_time.tzinfo is None
+            else callback_time.astimezone(timezone.utc)
+        )
+        order_updated_at = (
+            order.updated_at.replace(tzinfo=timezone.utc)
+            if order.updated_at.tzinfo is None
+            else order.updated_at.astimezone(timezone.utc)
+        )
+        if payload.occurredAt and callback_time < order_updated_at:
+            return {
+                "success": True,
+                "data": {
+                    "acknowledged": True,
+                    "stale": True,
+                    "order": order_data(db, order, include_events=True),
+                },
+            }
+
+        current_status = order.status
+        if current_status == "pending_payment":
+            raise HTTPException(status.HTTP_409_CONFLICT, "订单尚未支付，不能同步履约进度")
+        if current_status in {"completed", "cancelled"} and payload.status != current_status:
+            raise HTTPException(status.HTTP_409_CONFLICT, "订单已结束，不能变更履约状态")
+        if payload.status != "cancelled" and payload.status != current_status:
+            current_rank = PROVIDER_ORDER_STATUS_RANK.get(current_status)
+            next_rank = PROVIDER_ORDER_STATUS_RANK.get(payload.status)
+            if current_rank is None or next_rank is None or next_rank < current_rank:
+                raise HTTPException(status.HTTP_409_CONFLICT, "配送状态不能回退")
+
+        snapshot = db.scalar(
+            select(OrderFulfillmentSnapshot).where(OrderFulfillmentSnapshot.order_id == order.id)
+        )
+        if snapshot and snapshot.provider_key != provider_key:
+            raise HTTPException(status.HTTP_409_CONFLICT, "订单已由其他履约渠道接管")
+        if not snapshot:
+            snapshot = OrderFulfillmentSnapshot(
+                id=new_id(),
+                order_id=order.id,
+                provider_key=provider_key,
+            )
+            db.add(snapshot)
+
+        callback_fields = {
+            "externalOrderId": "external_order_id",
+            "trackingUrl": "tracking_url",
+            "estimatedArrivalAt": "estimated_arrival_at",
+            "riderName": "rider_name",
+            "riderVehicle": "rider_vehicle",
+            "riderStatus": "rider_status",
+        }
+        for payload_field, snapshot_field in callback_fields.items():
+            if payload_field in payload.model_fields_set:
+                setattr(snapshot, snapshot_field, getattr(payload, payload_field))
+
+        status_changed = payload.status != current_status
+        order.status = payload.status
+        order.updated_at = max(order_updated_at, callback_time)
+        snapshot.last_synced_at = received_at
+        source.last_synced_at = received_at
+        source.last_error = None
+        link.last_synced_at = received_at
+        if status_changed:
+            note = payload.note.strip() or f"{source.name}同步：{PROVIDER_ORDER_STATUS_LABEL[payload.status]}"
+            add_order_event(db, order, None, note, created_at=callback_time)
+        db.commit()
+        return {
+            "success": True,
+            "data": {
+                "acknowledged": True,
+                "stale": False,
+                "order": order_data(db, order, include_events=True),
+            },
+        }
+
+
 @app.get("/api/chat")
 def list_or_get_conversations(id: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     if id:
@@ -1219,7 +1497,7 @@ def list_or_get_conversations(id: str | None = None, user: User = Depends(curren
         messages = db.scalars(select(Message).where(Message.conversation_id == id).order_by(Message.created_at)).all()
         return {"success": True, "data": {"id": conversation.id, "title": conversation.title, "messages": [message_data(message) for message in messages], "extractedRequirements": parse_json(conversation.requirements_json, {})}}
     rows = db.scalars(select(Conversation).where(Conversation.user_id == user.id).order_by(Conversation.updated_at.desc())).all()
-    return {"success": True, "data": [{"id": row.id, "title": row.title, "createdAt": row.created_at.isoformat(), "updatedAt": row.updated_at.isoformat()} for row in rows]}
+    return {"success": True, "data": [{"id": row.id, "title": row.title, "createdAt": utc_iso(row.created_at), "updatedAt": utc_iso(row.updated_at)} for row in rows]}
 
 
 @app.post("/api/chat")
@@ -1295,7 +1573,7 @@ def blind_box_history(user: User = Depends(current_user), db: Session = Depends(
     return {
         "success": True,
         "data": [
-            {"id": record.id, "recommendation": parse_json(record.result_json, {}), "dataStatus": record.data_source, "createdAt": record.created_at.isoformat()}
+            {"id": record.id, "recommendation": parse_json(record.result_json, {}), "dataStatus": record.data_source, "createdAt": utc_iso(record.created_at)}
             for record in records
         ],
     }

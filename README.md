@@ -22,6 +22,8 @@
 - 站内购物车、演示支付与订单管理；提交和支付提供忙碌状态，取消订单采用二次确认
 - 已完成订单支持“再来一单”：复购前重新核对门店营业状态、商品可售性、实时库存、当前价格与配送费；已有购物车时先确认再替换
 - 进行中订单优先的履约中心：同步预计送达、五阶段进度、完整事件记录，并自动刷新状态
+- 配送实时状态卡：展示预计到达时刻、剩余时间、整体进度、下一节点、最近更新与配送员状态；手动同步失败时保留现有订单并提供重试
+- 配送渠道签名回调：校验渠道授权、门店绑定与 HMAC-SHA256 签名，幂等写入状态、ETA、骑手和轨迹链接，并拒绝状态倒退或过期消息
 - 演示渠道会自动推进确认、制作、取餐、配送和完成，并明确标注不会真实扣款
 - 已授权渠道可切换为平台订单回调、骑手信息和位置 H5 同步
 - “心动菜单”收藏夹：保存整套搭配、按场景分类、一键复购，并检测当前价格和可售状态
@@ -70,6 +72,23 @@ docker compose up --build
 ```
 
 前端为 `http://127.0.0.1:5173`，API 文档为 `http://127.0.0.1:8000/docs`。
+
+## 配送渠道回调适配
+
+为已授权渠道配置专用密钥（渠道 key 中的非字母数字字符需替换为下划线并转为大写）：
+
+```bash
+PROVIDER_MEITUAN_WEBHOOK_SECRET=replace-with-a-strong-secret
+```
+
+渠道将原始 JSON 请求体以 HMAC-SHA256 计算十六进制摘要，并请求：
+
+```text
+POST /api/provider-callbacks/{provider_key}/orders/{order_id}
+X-Provider-Signature: sha256={hex_digest}
+```
+
+回调体支持 `status`、`externalOrderId`、`trackingUrl`、`estimatedArrivalAt`、`riderName`、`riderVehicle`、`riderStatus`、`note` 与 `occurredAt`。也可使用 `PROVIDER_WEBHOOK_SECRET` 作为所有渠道的回退密钥；生产环境建议始终使用渠道专用密钥并定期轮换。
 
 ## 生产落地的下一步
 

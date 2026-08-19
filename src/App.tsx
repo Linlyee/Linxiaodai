@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BatteryCharging,
+  Bike,
   Bookmark,
   CalendarDays,
   ChefHat,
@@ -207,6 +208,8 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   const [diningRoomOpen, setDiningRoomOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [isRefreshingOrders, setIsRefreshingOrders] = useState(false);
+  const [ordersSyncError, setOrdersSyncError] = useState('');
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [toastUndo, setToastUndo] = useState<(() => Promise<void>) | null>(null);
@@ -239,7 +242,17 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
     localStorage.setItem(`linxiaodai:recent-addresses:${user.id}`, JSON.stringify(next));
   };
   const refreshConversations = () => api.conversations().then(setConversations).catch(() => setConversations([]));
-  const refreshOrders = () => api.orders().then(setOrders).catch(() => setOrders([]));
+  const refreshOrders = async (manual = false) => {
+    if (manual) setIsRefreshingOrders(true);
+    try {
+      setOrders(await api.orders());
+      setOrdersSyncError('');
+      if (manual) showToast('已同步最新订单与配送进度');
+    } catch {
+      setOrdersSyncError('配送进度暂时没有同步成功，现有信息已为你保留。');
+      if (manual) showToast('同步失败，请检查网络后重试');
+    } finally { if (manual) setIsRefreshingOrders(false); }
+  };
   const refreshTastePassport = () => api.tastePassport().then(next => {
     const storageKey = `linxiaodai:passport-seen:${user.id}`;
     const unlocked = next.stamps.filter(stamp => stamp.unlocked).map(stamp => stamp.cuisine);
@@ -447,7 +460,7 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
       {activePanel === 'requirements' && <DecisionPanel requirements={requirements} providers={providers} />}
       {activePanel === 'saved' && <SavedMealsPanel items={savedMeals} onReorder={reorderSavedMeal} onUpdate={async (id, patch) => { try { const updated = await api.updateSavedMeal(id, patch); setSavedMeals(previous => previous.map(item => item.id === id ? updated : item)); } catch (error) { showToast(error instanceof Error ? error.message : '收藏更新失败，请重试'); } }} onDelete={async id => { const removed = savedMeals.find(item => item.id === id); if (!removed) return; try { await api.deleteSavedMeal(id); setSavedMeals(previous => previous.filter(item => item.id !== id)); showToastWithUndo('已移出收藏夹', async () => { const restored = await api.updateSavedMeal(id, { restore: true }); setSavedMeals(previous => [restored, ...previous.filter(item => item.id !== restored.id)]); }); } catch (error) { showToast(error instanceof Error ? error.message : '删除失败，请检查网络后重试'); } }} />}
       {activePanel === 'cart' && <CartPanel items={cart} address={deliveryAddress} note={orderNote} isSubmitting={isCreatingOrder} onAddressChange={setDeliveryAddress} onNoteChange={setOrderNote} onQuantityChange={updateCartQuantity} onQuote={() => api.checkoutQuote(cart)} onApplyQuote={applyCheckoutQuote} onFindAlternatives={() => { setIsMobilePanelOpen(false); sendMessage(`当前购物车里的商品状态有变化，请按相近预算推荐一份可以立即下单的替代餐`); }} onCheckout={createOrder} />}
-      {activePanel === 'orders' && <OrdersPanel orders={orders} busyOrderId={busyOrderId} hasCartItems={cart.length > 0} tasteProfile={tasteProfile} tastePassport={tastePassport} weeklyRecap={weeklyRecap} onStartPrompt={prompt => { setIsMobilePanelOpen(false); sendMessage(prompt); }} onExploreCuisine={cuisine => { setIsMobilePanelOpen(false); sendMessage(`今天想解锁味觉护照里的${cuisine}印章，请推荐一餐`); }} onOrderAction={updateOrder} onReorder={reorderOrder} onSaveReflection={saveReflection} />}
+      {activePanel === 'orders' && <OrdersPanel orders={orders} busyOrderId={busyOrderId} hasCartItems={cart.length > 0} isRefreshing={isRefreshingOrders} syncError={ordersSyncError} tasteProfile={tasteProfile} tastePassport={tastePassport} weeklyRecap={weeklyRecap} onRefresh={() => refreshOrders(true)} onStartPrompt={prompt => { setIsMobilePanelOpen(false); sendMessage(prompt); }} onExploreCuisine={cuisine => { setIsMobilePanelOpen(false); sendMessage(`今天想解锁味觉护照里的${cuisine}印章，请推荐一餐`); }} onOrderAction={updateOrder} onReorder={reorderOrder} onSaveReflection={saveReflection} />}
     </aside>
     {isMobilePanelOpen && <button className="mobile-panel-scrim" aria-label="关闭详情面板" onClick={() => setIsMobilePanelOpen(false)} />}
     <nav className="mobile-nav" aria-label="主要导航"><button className={!isMobilePanelOpen ? 'active' : ''} onClick={() => setIsMobilePanelOpen(false)}><MessageCircle size={20} />对话</button><button className={isMobilePanelOpen && activePanel === 'requirements' ? 'active' : ''} onClick={() => openPanel('requirements')}><SlidersHorizontal size={20} />偏好</button><button className={isMobilePanelOpen && activePanel === 'saved' ? 'active' : ''} onClick={() => openPanel('saved')}><span><Bookmark size={20} />{savedMeals.length > 0 && <b>{savedMeals.length}</b>}</span>收藏</button><button className={isMobilePanelOpen && activePanel === 'cart' ? 'active' : ''} onClick={() => openPanel('cart')}><span><ShoppingCart size={20} />{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.quantity, 0)}</b>}</span>购物车</button><button className={isMobilePanelOpen && activePanel === 'orders' ? 'active' : ''} onClick={() => openPanel('orders')}><span><PackageCheck size={20} />{activeOrderCount > 0 && <b>{activeOrderCount}</b>}</span>订单</button></nav>
@@ -803,11 +816,11 @@ function CartPanel({ items, address, note, isSubmitting, onAddressChange, onNote
   </section>;
 }
 
-function OrdersPanel({ orders, busyOrderId, hasCartItems, tasteProfile, tastePassport, weeklyRecap, onStartPrompt, onExploreCuisine, onOrderAction, onReorder, onSaveReflection }: { orders: Order[]; busyOrderId: string | null; hasCartItems: boolean; tasteProfile: TasteProfile | null; tastePassport: TastePassport | null; weeklyRecap: WeeklyTasteRecap | null; onStartPrompt: (prompt: string) => void; onExploreCuisine: (cuisine: string) => void; onOrderAction: (id: string, action: 'pay' | 'cancel') => void; onReorder: (id: string) => Promise<void>; onSaveReflection: (id: string, mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
+function OrdersPanel({ orders, busyOrderId, hasCartItems, isRefreshing, syncError, tasteProfile, tastePassport, weeklyRecap, onRefresh, onStartPrompt, onExploreCuisine, onOrderAction, onReorder, onSaveReflection }: { orders: Order[]; busyOrderId: string | null; hasCartItems: boolean; isRefreshing: boolean; syncError: string; tasteProfile: TasteProfile | null; tastePassport: TastePassport | null; weeklyRecap: WeeklyTasteRecap | null; onRefresh: () => void; onStartPrompt: (prompt: string) => void; onExploreCuisine: (cuisine: string) => void; onOrderAction: (id: string, action: 'pay' | 'cancel') => void; onReorder: (id: string) => Promise<void>; onSaveReflection: (id: string, mood: MealMood, tags: TasteTag[], note: string) => Promise<void> }) {
   const activeOrders = orders.filter(order => !['completed', 'cancelled'].includes(order.status));
   const [filter, setFilter] = useState<'active' | 'all'>(() => activeOrders.length ? 'active' : 'all');
   const visibleOrders = filter === 'active' ? activeOrders : orders;
-  return <section className="panel-body order-panel"><div className="panel-heading"><span>ORDER JOURNEY</span><h2>订单与配送</h2><p>先看正在发生的事，再回顾已经吃过的味道</p></div><div className="order-filters" aria-label="筛选订单"><button className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>进行中 <span>{activeOrders.length}</span></button><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部订单 <span>{orders.length}</span></button></div>{visibleOrders.length ? <div className="order-list">{visibleOrders.map(order => <OrderCard key={order.id} order={order} busy={busyOrderId === order.id} hasCartItems={hasCartItems} action={onOrderAction} onReorder={onReorder} onSaveReflection={onSaveReflection} />)}</div> : filter === 'active' && orders.length ? <div className="orders-caught-up"><CheckCircle2 size={25} /><h3>当前没有进行中的订单</h3><p>已完成和已取消的记录都还在。</p><button onClick={() => setFilter('all')}>查看全部订单</button></div> : <EmptyState title="还没有订单" description="选好商品后，会在这里看到支付与配送进度。" />}<div className="order-insights"><div className="order-insights-heading"><span>TASTE ARCHIVE</span><h3>吃过之后，也值得记住</h3></div>{weeklyRecap && <WeeklyRecapEntry recap={weeklyRecap} onStartPrompt={onStartPrompt} />}{tastePassport && <TastePassportCard passport={tastePassport} onExplore={onExploreCuisine} />}{tasteProfile && <TasteProfileCard profile={tasteProfile} />}</div></section>;
+  return <section className="panel-body order-panel"><div className="order-panel-heading"><div className="panel-heading"><span>ORDER JOURNEY</span><h2>订单与配送</h2><p>先看正在发生的事，再回顾已经吃过的味道</p></div><button className="orders-refresh" type="button" disabled={isRefreshing} aria-label="刷新订单与配送进度" onClick={onRefresh}><RefreshCw size={15} className={isRefreshing ? 'spinning' : ''} />{isRefreshing ? '同步中' : '刷新'}</button></div><div className="order-filters" aria-label="筛选订单"><button className={filter === 'active' ? 'active' : ''} onClick={() => setFilter('active')}>进行中 <span>{activeOrders.length}</span></button><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>全部订单 <span>{orders.length}</span></button></div>{syncError && <div className="orders-sync-error" role="alert"><CircleAlert size={16} /><span>{syncError}</span><button type="button" disabled={isRefreshing} onClick={onRefresh}>重试</button></div>}{visibleOrders.length ? <div className="order-list">{visibleOrders.map(order => <OrderCard key={order.id} order={order} busy={busyOrderId === order.id} hasCartItems={hasCartItems} action={onOrderAction} onReorder={onReorder} onSaveReflection={onSaveReflection} />)}</div> : filter === 'active' && orders.length ? <div className="orders-caught-up"><CheckCircle2 size={25} /><h3>当前没有进行中的订单</h3><p>已完成和已取消的记录都还在。</p><button onClick={() => setFilter('all')}>查看全部订单</button></div> : <EmptyState title="还没有订单" description="选好商品后，会在这里看到支付与配送进度。" />}<div className="order-insights"><div className="order-insights-heading"><span>TASTE ARCHIVE</span><h3>吃过之后，也值得记住</h3></div>{weeklyRecap && <WeeklyRecapEntry recap={weeklyRecap} onStartPrompt={onStartPrompt} />}{tastePassport && <TastePassportCard passport={tastePassport} onExplore={onExploreCuisine} />}{tasteProfile && <TasteProfileCard profile={tasteProfile} />}</div></section>;
 }
 
 function WeeklyRecapEntry({ recap, onStartPrompt }: { recap: WeeklyTasteRecap; onStartPrompt: (prompt: string) => void }) {
@@ -860,11 +873,25 @@ function OrderCard({ order, busy, hasCartItems, action, onReorder, onSaveReflect
   const latestEvent = order.events?.[order.events.length - 1];
   const isTerminal = ['completed', 'cancelled'].includes(order.status);
   const statusMessage = latestEvent?.note || (order.status === 'pending_payment' ? '提交支付后，渠道才会开始处理订单' : statusLabel[order.status]);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (isTerminal || order.status === 'pending_payment') return;
+    const timer = window.setInterval(() => setClock(Date.now()), 10000);
+    return () => window.clearInterval(timer);
+  }, [isTerminal, order.status]);
+  const estimatedArrival = order.fulfillment.estimatedArrivalAt ? new Date(order.fulfillment.estimatedArrivalAt) : null;
+  const remainingMinutes = estimatedArrival ? Math.max(0, Math.ceil((estimatedArrival.getTime() - clock) / 60000)) : order.estimatedDeliveryTime;
+  const arrivalTime = estimatedArrival && !Number.isNaN(estimatedArrival.getTime()) ? estimatedArrival.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : null;
+  const remainingLabel = order.status === 'pending_payment' ? '等待操作' : order.fulfillment.delayStatus === 'delayed' ? '预计稍有延迟' : remainingMinutes <= 1 ? '即将送达' : `约 ${remainingMinutes} 分钟`;
+  const syncedAt = new Date(order.fulfillment.lastSyncedAt);
+  const syncAgeSeconds = Number.isNaN(syncedAt.getTime()) ? 0 : Math.max(0, Math.floor((clock - syncedAt.getTime()) / 1000));
+  const syncLabel = syncAgeSeconds < 20 ? '刚刚同步' : syncAgeSeconds < 60 ? `${syncAgeSeconds} 秒前同步` : syncAgeSeconds < 3600 ? `${Math.floor(syncAgeSeconds / 60)} 分钟前同步` : `${syncedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 同步`;
   return <article className={`order-card ${isTerminal ? 'terminal' : 'active-order'}`}>
     <header className="order-card-heading"><div><span className={`order-state-pill ${order.status}`}><i />{statusLabel[order.status]}</span><h3>{order.restaurantName}</h3><small>订单 #{order.id.slice(0, 8)} · {new Date(order.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></div><b>¥{formatMoney(order.total)}</b></header>
-    {!isTerminal && <div className="order-now"><div><Clock3 size={19} /></div><span><small>{order.status === 'pending_payment' ? '等待支付' : '预计送达'}</small><strong>{order.status === 'pending_payment' ? '完成支付后开始履约' : `约 ${order.estimatedDeliveryTime} 分钟`}</strong><p>{statusMessage}</p></span></div>}
+    {!isTerminal && <div className={`order-now ${order.fulfillment.delayStatus}`}><div><Clock3 size={19} /></div><span><small>{order.status === 'pending_payment' ? '等待支付' : arrivalTime ? `预计 ${arrivalTime} 送达` : '预计送达'}</small><strong>{remainingLabel}</strong><p>{order.fulfillment.currentAction || statusMessage}</p></span>{order.status !== 'pending_payment' && <b className="delivery-percent">{order.fulfillment.progressPercent}%</b>}<div className="delivery-progress-track" role="progressbar" aria-label="配送整体进度" aria-valuemin={0} aria-valuenow={order.fulfillment.progressPercent} aria-valuemax={100}><span style={{ width: `${order.fulfillment.progressPercent}%` }} /></div><footer><span><i />{syncLabel}</span>{order.fulfillment.nextMilestone && <b>下一步：{order.fulfillment.nextMilestone}</b>}</footer></div>}
     <div className="order-line-items">{order.items.map(item => <div key={item.id}><span>{item.name}<small>× {item.quantity}</small></span><b>¥{formatMoney(item.price * item.quantity)}</b></div>)}</div>
     {progressIndex >= 0 && <ol className="delivery-journey" role="progressbar" aria-label={`订单进度：${stageLabels[progressIndex]}`} aria-valuemin={1} aria-valuenow={progressIndex + 1} aria-valuemax={stageLabels.length}>{stageLabels.map((label, index) => <li className={index < progressIndex ? 'done' : index === progressIndex ? 'current' : ''} key={label}><i>{index <= progressIndex ? <CheckCircle2 size={14} /> : index + 1}</i><span>{label}</span></li>)}</ol>}
+    {order.fulfillment.rider && <div className="delivery-rider"><span><Bike size={18} /></span><div><b>{order.fulfillment.rider.displayName}</b><small>{order.fulfillment.rider.status}</small></div><em>{order.fulfillment.rider.vehicle}</em></div>}
     <div className={`fulfillment-source ${order.fulfillment.isLive ? 'live' : 'demo'}`}><PackageCheck size={17} /><span><b>{order.fulfillment.providerName} · {order.fulfillment.isLive ? '实时履约' : '演示履约'}</b><small>{order.fulfillment.notice}</small></span>{order.fulfillment.trackingUrl && <a href={order.fulfillment.trackingUrl} target="_blank" rel="noreferrer">查看骑手位置</a>}</div>
     {order.address && <div className="order-address"><Store size={15} /><span><small>送达地址</small>{order.address}</span></div>}
     {order.events?.length ? <details className="order-events"><summary>查看完整进度（{order.events.length} 条）</summary>{order.events.slice().reverse().map((event, index) => <div key={`${event.createdAt}-${index}`}><span>{new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span><p>{event.note || statusLabel[event.status]}</p></div>)}</details> : null}

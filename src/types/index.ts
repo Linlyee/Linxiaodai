@@ -222,6 +222,17 @@ export interface Order {
     trackingMode: 'simulated' | 'provider_callback';
     trackingUrl: string | null;
     notice: string;
+    lastSyncedAt: string;
+    estimatedArrivalAt: string | null;
+    progressPercent: number;
+    currentAction: string;
+    nextMilestone: string | null;
+    delayStatus: 'on_time' | 'delayed';
+    rider: {
+      displayName: string;
+      vehicle: string;
+      status: string;
+    } | null;
   };
   events?: Array<{ status: OrderStatus; note: string; createdAt: string }>;
   reflection?: MealReflection | null;
