@@ -905,6 +905,15 @@ class DiningRoomVoteRequest(BaseModel):
 
 def extract_requirements(message: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     req = dict(existing or {})
+    clear_spice = any(phrase in message for phrase in ["口味不限", "辣度不限", "不限辣度"])
+    if any(phrase in message for phrase in ["不限菜系", "菜系不限", "取消菜系限制"]):
+        req.pop("cuisines", None)
+    if clear_spice:
+        req.pop("spiceLevel", None)
+    if any(phrase in message for phrase in ["商品价", "菜品价", "配送费另算"]):
+        req["budgetScope"] = "item"
+    elif any(phrase in message for phrase in ["到手价", "实付", "含配送", "连配送", "算上配送"]):
+        req["budgetScope"] = "delivered"
     people = re.search(r"(\d+)\s*(?:个)?人", message)
     if people:
         req["peopleCount"] = int(people.group(1))
@@ -923,14 +932,15 @@ def extract_requirements(message: str, existing: dict[str, Any] | None = None) -
     cuisines = sorted({value for key, value in cuisine_map.items() if key in message})
     if cuisines:
         req["cuisines"] = cuisines
-    if any(word in message for word in ["不辣", "清淡", "少油"]):
-        req["spiceLevel"] = "none"
-    elif any(word in message for word in ["微辣", "一点辣"]):
-        req["spiceLevel"] = "mild"
-    elif any(word in message for word in ["重辣", "很辣", "特辣"]):
-        req["spiceLevel"] = "hot"
-    elif "辣" in message:
-        req["spiceLevel"] = "medium"
+    if not clear_spice:
+        if any(word in message for word in ["不辣", "清淡", "少油"]):
+            req["spiceLevel"] = "none"
+        elif any(word in message for word in ["微辣", "一点辣"]):
+            req["spiceLevel"] = "mild"
+        elif any(word in message for word in ["重辣", "很辣", "特辣"]):
+            req["spiceLevel"] = "hot"
+        elif "辣" in message:
+            req["spiceLevel"] = "medium"
     avoid = set(req.get("mustAvoid", []))
     for word in ["海鲜", "鱼", "花生", "鸡蛋", "乳制品", "香菜"]:
         if f"不吃{word}" in message or f"不要{word}" in message or f"{word}过敏" in message:
@@ -994,10 +1004,13 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
         candidates = [item for item in candidates if item.spice_level == spice]
 
     budget = requirements.get("budget")
+    budget_scope = requirements.get("budgetScope", "item")
     if budget:
         candidates = [
             item for item in candidates
-            if budget.get("min", 0) <= item.price <= budget["max"]
+            if budget.get("min", 0)
+            <= (item.price + restaurants[item.restaurant_id].delivery_fee if budget_scope == "delivered" else item.price)
+            <= budget["max"]
         ]
 
     ranked: list[tuple[float, MenuItem, Restaurant]] = []
@@ -1050,6 +1063,22 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
             continue
         link = links.get(restaurant.id)
         source = sources.get(link.provider_key if link else "demo")
+        synced_at = link.last_synced_at if link and link.last_synced_at else source.last_synced_at if source else None
+        freshness_status = "demo"
+        freshness_label = "演示样本"
+        if source and source.status == "authorized" and synced_at:
+            aware_synced_at = synced_at.replace(tzinfo=timezone.utc) if synced_at.tzinfo is None else synced_at
+            age_minutes = max(0, int((utc_now() - aware_synced_at).total_seconds() // 60))
+            if age_minutes <= 15:
+                freshness_status, freshness_label = "live", "15 分钟内已同步"
+            elif age_minutes <= 60:
+                freshness_status, freshness_label = "recent", f"{age_minutes} 分钟前同步"
+            else:
+                freshness_status, freshness_label = "stale", "价格更新较早"
+        original_price = item.original_price if item.original_price and item.original_price > item.price else item.price
+        estimated_payable = round(item.price + restaurant.delivery_fee, 2)
+        savings = round(max(0, original_price - item.price), 2)
+        matched_price = estimated_payable if budget_scope == "delivered" else item.price
         reason_prefix = {
             "sales": f"销量优先：{item.name} 已售 {item.sales_count} 份",
             "rating": f"口碑优先：{item.name} 评分 {item.rating}",
@@ -1062,11 +1091,26 @@ def recommendations(db: Session, requirements: dict[str, Any], limit: int = 3, u
             "totalPrice": item.price,
             "deliveryFee": restaurant.delivery_fee,
             "estimatedDeliveryTime": restaurant.avg_delivery_time,
-            "reason": f"{reason_prefix}，商品价 ¥{item.price:g}，配送费 ¥{restaurant.delivery_fee:g}",
+            "reason": f"{reason_prefix}，预计到手 ¥{estimated_payable:g}",
             "score": round(max(score, 0), 1),
             "heatScore": min(99, round(item.sales_count / 35 + item.rating * 12)),
             "dataStatus": "synced" if source and source.status == "authorized" else "demo",
-            "syncedAt": link.last_synced_at.isoformat() if link and link.last_synced_at else None,
+            "syncedAt": synced_at.isoformat() if synced_at else None,
+            "pricing": {
+                "itemPrice": item.price,
+                "originalItemPrice": original_price,
+                "deliveryFee": restaurant.delivery_fee,
+                "estimatedPayable": estimated_payable,
+                "savings": savings,
+                "budgetScope": budget_scope,
+                "matchedPrice": matched_price,
+                "disclaimer": "预计到手价不含平台专属红包，下单前会再次校验",
+            },
+            "freshness": {
+                "status": freshness_status,
+                "label": freshness_label,
+                "syncedAt": synced_at.isoformat() if synced_at else None,
+            },
             "provider": {
                 "key": source.key if source else "demo",
                 "name": source.name if source else "本地演示数据",
@@ -1185,7 +1229,8 @@ def chat(payload: ChatRequest, user: User = Depends(current_user), db: Session =
             db.add(conversation)
         requirements = extract_requirements(payload.message, parse_json(conversation.requirements_json, {}))
         recs = recommendations(db, requirements, user_id=user.id)
-        reply = "我已按商品价格、口味、忌口与配送条件进行了严格筛选。"
+        price_scope_copy = "到手价（含配送费）" if requirements.get("budgetScope") == "delivered" else "商品价（配送费另计）"
+        reply = f"我已按{price_scope_copy}、口味、忌口与配送条件进行了严格筛选。"
         if recs:
             sort_copy = {"sales": "销量", "rating": "评分", "speed": "送达速度", "value": "性价比"}.get(requirements.get("sortBy"), "综合匹配度")
             reply += f" 按{sort_copy}首推 {recs[0]['restaurant']['name']} 的 {recs[0]['menuItems'][0]['name']}。"
@@ -1204,7 +1249,7 @@ def chat(payload: ChatRequest, user: User = Depends(current_user), db: Session =
 def blind_box(requirements: dict[str, Any], user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     recs = recommendations(db, requirements, limit=5, user_id=user.id)
     if not recs:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "没有符合条件的可售菜品")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "没有符合条件的可售商品")
     primary_index = secrets.randbelow(min(3, len(recs)))
     primary = recs.pop(primary_index)
     record = BlindBoxRecord(

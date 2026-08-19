@@ -393,12 +393,15 @@ function ChatWorkspace({ messages, requirements, restaurantCount, savedMeals, is
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (messages.length > 0) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isSending]);
   const submit = () => { const value = input.trim(); if (value) { setInput(''); onSend(value); } };
-  const examples = ['我想吃 20 元以内销量最好的午餐', '来点清淡的，不要海鲜', '想吃日料，配送别太久', '一个人加班，30 元左右'];
+  const examples = ['我想吃 20 元以内销量最好的午餐', '到手价 30 元内，来点清淡的', '想吃日料，配送别太久', '一个人加班，30 元左右'];
+  const latestMessage = messages.at(-1);
+  const recoveryOptions = latestMessage?.role === 'assistant' && !latestMessage.recommendations?.length && !isSending ? buildRecoveryOptions(requirements) : [];
   return <main className="workspace" id="main-content">
     <header className="topbar"><div><span className="topbar-kicker">TODAY'S PICK</span><h1>今天想吃点什么？</h1></div><div className="topbar-meta"><span className="status-dot" />{restaurantCount} 家可选门店</div></header>
     <section className="message-list">
       {messages.length === 0 ? <BlindBoxLaunchpad requirements={requirements} onOpen={onBlindBox} onAsk={onSend} examples={examples} /> : messages.map(message => <article className={`message ${message.role}`} key={message.id}><div className="bubble">{message.content}</div>{message.recommendations?.length ? <div className="recommendations">{message.recommendations.map(recommendation => { const itemIds = recommendation.menuItems.map(item => item.id).sort().join('|'); const isSaved = savedMeals.some(saved => saved.restaurant?.id === recommendation.restaurant.id && [...saved.menuItemIds].sort().join('|') === itemIds); return <RecommendationCard key={`${recommendation.restaurant.id}-${recommendation.totalPrice}`} recommendation={recommendation} isSaved={isSaved} onAdd={onAddToCart} onSave={onSaveMeal} blindBoxId={message.blindBoxId} onFeedback={onFeedback} />; })}</div> : null}</article>)}
-      {isSending && <div className="thinking"><span /><span /><span />小呆正在匹配餐厅...</div>}<div ref={endRef} />
+      {recoveryOptions.length > 0 && <section className="search-recovery" aria-label="调整搜索条件"><div><RotateCcw size={18} /><span><b>换个条件，马上再找</b><small>保留其他偏好，只调整最可能卡住结果的条件</small></span></div><div className="recovery-actions">{recoveryOptions.map(option => <button key={option.prompt} type="button" onClick={() => onSend(option.prompt)}><strong>{option.label}</strong><span>{option.detail}</span></button>)}</div></section>}
+      {isSending && <div className="thinking"><span /><span /><span />小呆正在匹配商品...</div>}<div ref={endRef} />
     </section>
     <footer className="composer-wrap"><div className="composer"><button className="icon-action" title="外卖盲盒" onClick={() => onBlindBox()}><Gift size={19} /></button><textarea value={input} rows={1} placeholder={summaryText(requirements) || '例如：20 元内、午餐、销量最好…'} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} /><button className="send-button" title="发送消息" disabled={!input.trim() || isSending} onClick={submit}><Send size={18} /></button></div><span className="composer-hint">按 Enter 发送 · Shift + Enter 换行</span></footer>
   </main>;
@@ -520,21 +523,38 @@ function DiningRoomDialog({ requirements, onClose, onPick }: { requirements: Ext
 
 function RecommendationCard({ recommendation, isSaved, onAdd, onSave, blindBoxId, onFeedback }: { recommendation: RecommendationResult; isSaved: boolean; onAdd: (recommendation: RecommendationResult, index?: number) => void; onSave: (recommendation: RecommendationResult) => Promise<void>; blindBoxId?: string; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void }) {
   const [saving, setSaving] = useState(false);
+  const pricing = recommendation.pricing || {
+    itemPrice: recommendation.totalPrice,
+    originalItemPrice: recommendation.menuItems.reduce((sum, item) => sum + (item.originalPrice || item.price), 0),
+    deliveryFee: recommendation.deliveryFee,
+    estimatedPayable: recommendation.totalPrice + recommendation.deliveryFee,
+    savings: recommendation.menuItems.reduce((sum, item) => sum + Math.max(0, (item.originalPrice || item.price) - item.price), 0),
+    budgetScope: 'item' as const,
+    matchedPrice: recommendation.totalPrice,
+    disclaimer: '预计价格，下单前会再次校验',
+  };
+  const freshness = recommendation.freshness || {
+    status: recommendation.dataStatus === 'synced' ? 'recent' as const : 'demo' as const,
+    label: recommendation.dataStatus === 'synced' ? '已同步' : '演示样本',
+    syncedAt: recommendation.syncedAt,
+  };
   const save = async () => { if (saving) return; setSaving(true); try { await onSave(recommendation); } finally { setSaving(false); } };
   return <div className="recommendation-card">
     <div className="rec-header"><div><h3>{recommendation.restaurant.name}</h3><p>{recommendation.restaurant.description}</p></div><div className="rec-header-actions"><button type="button" aria-label={isSaved ? `${recommendation.restaurant.name}的推荐商品已收藏` : `收藏${recommendation.restaurant.name}的推荐商品`} disabled={saving || isSaved} onClick={save}><Bookmark size={17} fill={isSaved ? 'currentColor' : 'none'} />{isSaved ? '已收藏' : saving ? '收藏中' : '收藏商品'}</button><span className="score">{Math.round(recommendation.score)} 分</span></div></div>
     <div className="rec-meta"><span><Star size={15} />{recommendation.restaurant.rating}</span><span><Clock3 size={15} />{recommendation.estimatedDeliveryTime} 分钟</span><span><Flame size={15} />热度 {recommendation.heatScore}</span></div>
     <p className="rec-reason">{recommendation.reason}</p>
-    <div className={`data-status ${recommendation.dataStatus}`}><span>{recommendation.dataStatus === 'synced' ? '已授权同步' : '演示商品'}</span>{recommendation.provider?.orderUrl ? `来自 ${recommendation.provider.name}，价格与可售状态已同步` : '真实渠道正在等待授权，当前不会发起真实交易'}</div>
-    <div className="menu-list">{recommendation.menuItems.map((item, index) => <div className="menu-row" key={item.id}><div><strong>{item.name}</strong><span>{item.tags.join(' / ') || item.description}</span><small>已售 {item.salesCount} 份 · 商品评分 {item.rating}{item.originalPrice && item.originalPrice > item.price ? ` · 原价 ¥${item.originalPrice}` : ''}</small></div><button aria-label={`将${item.name}加入购物车`} onClick={() => onAdd(recommendation, index)}>¥{item.price}</button></div>)}</div>
-    <div className="rec-footer"><b>商品 ¥{recommendation.totalPrice} + 配送 ¥{recommendation.deliveryFee}</b>{recommendation.provider?.orderUrl ? <a className="primary-button compact" href={recommendation.provider.orderUrl} target="_blank" rel="noreferrer" onClick={() => blindBoxId && onFeedback(blindBoxId, 'platform_opened')}>去 {recommendation.provider.name} 下单</a> : <span className="redirect-pending">等待交易授权</span>}</div>
+    <div className={`data-status ${recommendation.dataStatus}`}><span>{recommendation.dataStatus === 'synced' ? '渠道已连接' : '演示数据'}</span>{recommendation.provider?.orderUrl ? `来自 ${recommendation.provider.name}，下单前仍会校验价格与库存` : '当前可体验站内下单与配送流程，不会产生真实扣款'}</div>
+    <div className="menu-list">{recommendation.menuItems.map((item, index) => <div className="menu-row" key={item.id}><div><strong>{item.name}</strong><span>{item.tags.join(' / ') || item.description}</span><small>已售 {item.salesCount} 份 · 商品评分 {item.rating}{item.originalPrice && item.originalPrice > item.price ? ` · 原价 ¥${item.originalPrice}` : ''}</small></div><button aria-label={`将${item.name}加入购物车`} onClick={() => onAdd(recommendation, index)}><ShoppingCart size={15} />¥{item.price} · 加入</button></div>)}</div>
+    <div className="price-trust"><div className="payable-price"><span>预计到手</span><strong>¥{formatMoney(pricing.estimatedPayable)}</strong>{pricing.savings > 0 && <b>已省 ¥{formatMoney(pricing.savings)}</b>}</div><div className="price-breakdown"><span>商品 ¥{formatMoney(pricing.itemPrice)} + 配送 ¥{formatMoney(pricing.deliveryFee)}</span><span className={`freshness ${freshness.status}`}><RotateCcw size={13} />{freshness.label} · {pricing.budgetScope === 'delivered' ? '按到手价命中' : '按商品价命中'}</span></div><small>{pricing.disclaimer}</small></div>
+    <div className="rec-footer">{recommendation.provider?.orderUrl ? <><span className="redirect-ready">也可先加入购物车统一结算</span><a className="primary-button compact" href={recommendation.provider.orderUrl} target="_blank" rel="noreferrer" onClick={() => blindBoxId && onFeedback(blindBoxId, 'platform_opened')}>去 {recommendation.provider.name} 下单</a></> : <span className="redirect-ready"><CheckCircle2 size={15} />可加入购物车体验站内下单</span>}</div>
     {blindBoxId && <div className="feedback-row"><span>这次合胃口吗？</span><button onClick={() => onFeedback(blindBoxId, 'liked')}><ThumbsUp size={15} />喜欢</button><button onClick={() => onFeedback(blindBoxId, 'disliked')}><ThumbsDown size={15} />换个口味</button></div>}
   </div>;
 }
 
 function DecisionPanel({ requirements, providers }: { requirements: ExtractedRequirements; providers: ProviderSource[] }) {
   const sortLabels = { sales: '销量优先', rating: '评分优先', speed: '送达优先', value: '性价比优先' };
-  return <section className="panel-body decision-panel"><div className="panel-heading"><span>PREFERENCES</span><h2>本次偏好</h2></div><div className="requirement-list"><div className="requirement-row"><span>商品预算</span><strong>{requirements.budget ? `¥${requirements.budget.max} 以内` : '未限定'}</strong></div>{requirements.sortBy && <div className="requirement-row"><span>排序方式</span><strong>{sortLabels[requirements.sortBy]}</strong></div>}<div className="requirement-row"><span>口味</span><strong>{requirements.spiceLevel ? spiceLabel[requirements.spiceLevel] : '随意'}</strong></div><div className="requirement-row"><span>忌口</span><strong>{requirements.mustAvoid?.join('、') || '无'}</strong></div></div><div className="panel-heading source-title"><span>SOURCES</span><h2>商品来源</h2></div><div className="source-list">{providers.length ? providers.map(provider => <div className="source-row" key={provider.key}><div><strong>{provider.name}</strong><span>{provider.restaurantCount} 家可选门店 · {provider.lastSyncedAt ? `更新于 ${new Date(provider.lastSyncedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '等待同步'}</span></div><b className={provider.status}>{provider.status === 'authorized' ? '已授权' : provider.status === 'error' ? '异常' : '演示'}</b></div>) : <EmptyState title="暂无数据源" description="授权连接后会显示同步状态。" />}</div><div className="hint-box"><Sparkles size={18} /><p>接入授权平台后，商品价格、可售状态与配送进度会实时更新。</p></div></section>;
+  const deliveredBudget = requirements.budgetScope === 'delivered';
+  return <section className="panel-body decision-panel"><div className="panel-heading"><span>PREFERENCES</span><h2>本次偏好</h2></div><div className="requirement-list"><div className="requirement-row budget-requirement"><span>{deliveredBudget ? '到手价预算' : '商品预算'}<small>{deliveredBudget ? '包含配送费' : '配送费另计'}</small></span><strong>{requirements.budget ? `¥${requirements.budget.max} 以内` : '未限定'}</strong></div>{requirements.sortBy && <div className="requirement-row"><span>排序方式</span><strong>{sortLabels[requirements.sortBy]}</strong></div>}<div className="requirement-row"><span>口味</span><strong>{requirements.spiceLevel ? spiceLabel[requirements.spiceLevel] : '随意'}</strong></div><div className="requirement-row"><span>忌口</span><strong>{requirements.mustAvoid?.join('、') || '无'}</strong></div></div><div className="panel-heading source-title"><span>SOURCES</span><h2>商品来源</h2></div><div className="source-list">{providers.length ? providers.map(provider => <div className="source-row" key={provider.key}><div><strong>{provider.name}</strong><span>{provider.restaurantCount} 家可选门店 · {provider.lastSyncedAt ? `更新于 ${new Date(provider.lastSyncedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '等待同步'}</span></div><b className={provider.status}>{provider.status === 'authorized' ? '已授权' : provider.status === 'error' ? '异常' : '演示'}</b></div>) : <EmptyState title="暂无数据源" description="授权连接后会显示同步状态。" />}</div><div className="hint-box"><Sparkles size={18} /><p>接入授权平台后，商品价格、可售状态与配送进度会实时更新。</p></div></section>;
 }
 
 const savedOccasionLabels: Record<SavedMealOccasion, string> = { anytime: '随时想吃', workday: '加班救星', reward: '奖励自己', together: '朋友聚餐', light: '清爽回血' };
@@ -642,7 +662,23 @@ function RequirementsPanel({ requirements }: { requirements: ExtractedRequiremen
 }
 
 function EmptyState({ title, description }: { title: string; description: string }) { return <div className="empty-state"><Sparkles size={22} /><strong>{title}</strong><span>{description}</span></div>; }
-function summaryText(requirements: ExtractedRequirements) { const parts: string[] = []; if (requirements.peopleCount) parts.push(`${requirements.peopleCount} 人`); if (requirements.budget) parts.push(`¥${requirements.budget.max} 以内`); if (requirements.spiceLevel) parts.push(spiceLabel[requirements.spiceLevel]); if (requirements.cuisines?.length) parts.push(requirements.cuisines.join('、')); return parts.length ? `继续补充需求：${parts.join(' / ')}` : ''; }
+function buildRecoveryOptions(requirements: ExtractedRequirements) {
+  const options: Array<{ label: string; detail: string; prompt: string }> = [];
+  if (requirements.budget) {
+    const relaxedBudget = Math.ceil((requirements.budget.max + 10) / 5) * 5;
+    const scope = requirements.budgetScope === 'delivered' ? '到手价' : '商品价';
+    options.push({ label: `放宽到 ¥${relaxedBudget}`, detail: `${scope}预算增加一点`, prompt: `${scope} ${relaxedBudget} 元以内，其他条件不变` });
+    if (requirements.budgetScope === 'delivered') options.push({ label: '配送费另算', detail: `商品仍控制在 ¥${requirements.budget.max} 内`, prompt: `按商品价控制在 ${requirements.budget.max} 元以内，配送费另算，其他条件不变` });
+  }
+  if (requirements.cuisines?.length) options.push({ label: '不限菜系', detail: '保留预算和口味', prompt: '菜系不限，其他条件不变' });
+  if (requirements.spiceLevel && options.length < 3) options.push({ label: '口味不限', detail: '扩大可选商品范围', prompt: '口味不限，其他条件不变' });
+  if (!options.length) options.push({ label: '看看热销', detail: '30 元商品价内', prompt: '推荐 30 元以内销量最好的商品' });
+  return options.slice(0, 3);
+}
+
+function formatMoney(value: number) { return Number.isInteger(value) ? String(value) : value.toFixed(2); }
+
+function summaryText(requirements: ExtractedRequirements) { const parts: string[] = []; if (requirements.peopleCount) parts.push(`${requirements.peopleCount} 人`); if (requirements.budget) parts.push(`${requirements.budgetScope === 'delivered' ? '到手价' : '商品价'} ¥${requirements.budget.max} 以内`); if (requirements.spiceLevel) parts.push(spiceLabel[requirements.spiceLevel]); if (requirements.cuisines?.length) parts.push(requirements.cuisines.join('、')); return parts.length ? `继续补充需求：${parts.join(' / ')}` : ''; }
 
 function buildAppetiteProfile(answers: AppetiteAnswer[], base: ExtractedRequirements): AppetiteProfile {
   const [energy, scene, taste] = answers;

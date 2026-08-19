@@ -61,6 +61,21 @@ export interface RecommendationResult {
   heatScore: number;
   dataStatus: 'demo' | 'synced';
   syncedAt: string | null;
+  pricing?: {
+    itemPrice: number;
+    originalItemPrice: number;
+    deliveryFee: number;
+    estimatedPayable: number;
+    savings: number;
+    budgetScope: 'item' | 'delivered';
+    matchedPrice: number;
+    disclaimer: string;
+  };
+  freshness?: {
+    status: 'live' | 'recent' | 'stale' | 'demo';
+    label: string;
+    syncedAt: string | null;
+  };
   provider: {
     key: string;
     name: string;
@@ -90,6 +105,7 @@ export interface BlindBoxOpenResult {
 export interface ExtractedRequirements {
   peopleCount?: number;
   budget?: { min: number; max: number };
+  budgetScope?: 'item' | 'delivered';
   cuisines?: string[];
   spiceLevel?: SpiceLevel;
   mustAvoid?: string[];

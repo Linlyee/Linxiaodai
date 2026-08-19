@@ -818,7 +818,13 @@ summary {
 }
 
 .menu-row button {
-  min-width: 58px;
+  min-width: 112px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: center;
   border: 0;
   border-radius: 9px;
   background: #f1e2d5;
@@ -826,16 +832,77 @@ summary {
   font-weight: 900;
 }
 
+.price-trust {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid #dfe9e3;
+  border-radius: 12px;
+  color: var(--forest);
+  background: #f6faf7;
+}
+
+.payable-price,
+.price-breakdown,
+.freshness,
+.redirect-ready {
+  display: flex;
+  align-items: center;
+}
+
+.payable-price { gap: 8px; }
+.payable-price > span { color: #6f7e77; font-size: 12px; font-weight: 800; }
+.payable-price > strong { font-family: Georgia, "Songti SC", serif; font-size: 24px; font-weight: 600; }
+.payable-price > b { padding: 3px 7px; border-radius: 999px; color: #a45542; background: #ffebe4; font-size: 10px; }
+.price-breakdown { justify-content: space-between; flex-wrap: wrap; gap: 7px 12px; color: #5f7068; font-size: 11px; }
+.freshness { gap: 4px; font-weight: 800; }
+.freshness.live { color: #26724f; }
+.freshness.recent { color: #4c7963; }
+.freshness.stale { color: #a36637; }
+.freshness.demo { color: #87684a; }
+.price-trust > small { padding-top: 7px; border-top: 1px solid #e5ece7; color: #87918d; font-size: 10px; line-height: 1.45; }
+
 .rec-footer {
   align-items: center;
   margin-top: 14px;
 }
 
-.redirect-pending {
+.redirect-pending,
+.redirect-ready {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
+
+.redirect-ready { gap: 5px; }
+
+.search-recovery {
+  width: min(760px, 100%);
+  display: grid;
+  gap: 12px;
+  margin-top: 2px;
+  padding: 15px;
+  border: 1px solid #eadccf;
+  border-radius: 14px;
+  background: #fffaf4;
+}
+
+.search-recovery > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--accent-dark);
+}
+
+.search-recovery > div:first-child > span { display: grid; gap: 2px; }
+.search-recovery > div:first-child b { font-size: 13px; }
+.search-recovery > div:first-child small { color: var(--muted); font-size: 11px; }
+.recovery-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.recovery-actions button { min-height: 54px; display: grid; gap: 2px; padding: 9px 11px; border: 1px solid #e5d8cb; border-radius: 10px; color: #5d5148; background: white; text-align: left; }
+.recovery-actions button:hover { border-color: var(--accent); background: #fff5ed; }
+.recovery-actions strong { color: var(--accent-dark); font-size: 12px; }
+.recovery-actions span { color: var(--muted); font-size: 10px; }
 
 .composer {
   display: grid;
@@ -938,6 +1005,9 @@ summary {
   color: var(--muted);
   font-size: 13px;
 }
+
+.budget-requirement > span { display: grid; gap: 2px; }
+.budget-requirement small { color: #9a8d82; font-size: 9px; }
 
 .hint-box {
   display: flex;
@@ -2092,6 +2162,15 @@ summary {
 
 @media (max-width: 620px) {
   .rec-header-actions > button { min-height: 44px; font-size: 12px; }
+  .menu-row { align-items: stretch; }
+  .menu-row button { min-width: 102px; }
+  .price-breakdown { align-items: flex-start; flex-direction: column; font-size: 12px; }
+  .price-trust > small { font-size: 11px; }
+  .rec-footer { align-items: flex-start; flex-direction: column; }
+  .rec-footer .primary-button { width: 100%; min-height: 44px; }
+  .recovery-actions { grid-template-columns: 1fr; }
+  .recovery-actions button { min-height: 58px; }
+  .search-recovery > div:first-child small, .recovery-actions span { font-size: 12px; }
   .saved-meals-panel .panel-heading > p, .saved-menu-items, .saved-empty p { font-size: 13px; }
   .saved-filters button { min-height: 44px; font-size: 12px; }
   .saved-meal-list header > button { width: 44px; height: 44px; }
@@ -3311,7 +3390,9 @@ summary {
   .room-live header > button,
   .room-candidates article > button,
   .room-consensus button,
-  .room-live footer button {
+  .room-live footer button,
+  .menu-row button,
+  .recovery-actions button {
     min-height: 44px;
   }
 
