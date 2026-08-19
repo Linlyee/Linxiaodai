@@ -4253,3 +4253,172 @@ summary {
   .decision-overview { padding: 12px; border-radius: 16px; }
   .decision-overview > header p { display: none; }
 }
+
+/* Persistent fulfillment context — keeps the next order action visible while browsing */
+.active-order-dock {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  width: min(780px, 100%);
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+  margin: 0 auto 16px;
+  padding: 11px 12px 9px;
+  border: 1px solid #cadbd1;
+  border-radius: 17px;
+  color: var(--forest);
+  background: rgba(249, 252, 249, 0.95);
+  box-shadow: 0 12px 30px rgba(24, 58, 48, 0.1);
+  backdrop-filter: blur(14px);
+}
+
+.active-order-dock.needs-action {
+  border-color: #e1c5ba;
+  background: rgba(255, 250, 247, 0.96);
+}
+
+.order-dock-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: white;
+  background: var(--forest);
+  box-shadow: 0 8px 18px rgba(23, 63, 54, 0.17);
+}
+
+.needs-action .order-dock-icon {
+  background: var(--accent-dark);
+  box-shadow: 0 8px 18px rgba(169, 61, 44, 0.16);
+}
+
+.order-dock-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.order-dock-copy > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.order-dock-copy small,
+.order-dock-copy em {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #5e796c;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.order-dock-copy small i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4f9f78;
+  box-shadow: 0 0 0 3px rgba(79, 159, 120, 0.12);
+}
+
+.needs-action .order-dock-copy small { color: var(--accent-dark); }
+.needs-action .order-dock-copy small i { background: var(--accent-dark); box-shadow: 0 0 0 3px rgba(169, 61, 44, 0.1); }
+.order-dock-copy em { padding: 2px 6px; border-radius: 999px; color: #6e7d76; background: #e9efeb; letter-spacing: 0; }
+.order-dock-copy strong { overflow: hidden; font-family: Georgia, "Songti SC", serif; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.order-dock-copy > span { overflow: hidden; color: #73827b; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.active-order-dock > button {
+  min-width: 78px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid #cbd9d1;
+  border-radius: 12px;
+  color: white;
+  background: var(--forest);
+  font-size: 11px;
+  font-weight: 900;
+  transition: background-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+
+.active-order-dock > button:hover,
+.active-order-dock > button:focus-visible { background: #0f332b; box-shadow: 0 7px 16px rgba(23, 63, 54, 0.16); }
+.needs-action > button { border-color: var(--accent-dark); background: var(--accent-dark); }
+.needs-action > button:hover,
+.needs-action > button:focus-visible { background: #923526; }
+
+.order-dock-progress {
+  grid-column: 2 / -1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e1e9e3;
+}
+
+.order-dock-progress > span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #5f9d79;
+  transition: width var(--motion-normal) ease-out;
+}
+
+.needs-action .order-dock-progress > span { background: var(--accent); }
+
+@media (max-width: 620px) {
+  .active-order-dock {
+    top: -6px;
+    gap: 8px 9px;
+    min-height: 70px;
+    margin-bottom: 12px;
+    padding: 9px 9px 8px;
+    border-radius: 15px;
+  }
+  .order-dock-icon { width: 38px; height: 38px; border-radius: 11px; }
+  .order-dock-copy strong { font-size: 13px; }
+  .order-dock-copy > span { font-size: 9px; }
+  .active-order-dock > button { min-width: 70px; padding: 0 8px; }
+}
+
+@media (max-width: 390px) {
+  .order-dock-copy em { display: none; }
+  .active-order-dock > button svg { display: none; }
+  .active-order-dock > button { min-width: 62px; }
+}
+
+@media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+  .message-list { padding-top: 8px; }
+  .active-order-dock {
+    position: relative;
+    top: 0;
+    min-height: 48px;
+    height: 48px;
+    gap: 7px;
+    margin-bottom: 8px;
+    padding: 4px 7px;
+    border-radius: 13px;
+  }
+  .order-dock-icon { width: 34px; height: 34px; border-radius: 10px; }
+  .order-dock-copy { gap: 0; }
+  .order-dock-copy > div,
+  .order-dock-copy > span { display: none; }
+  .order-dock-copy strong { font-size: 13px; }
+  .active-order-dock > button { min-width: 70px; min-height: 38px; }
+  .order-dock-progress {
+    position: absolute;
+    right: 8px;
+    bottom: 3px;
+    left: 48px;
+    height: 3px;
+  }
+}

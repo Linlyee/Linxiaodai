@@ -443,7 +443,8 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
   };
 
   const openPanel = (panel: 'requirements' | 'saved' | 'cart' | 'orders') => { setActivePanel(panel); setIsMobilePanelOpen(true); };
-  const activeOrderCount = orders.filter(order => !['completed', 'cancelled'].includes(order.status)).length;
+  const activeOrders = orders.filter(order => !['completed', 'cancelled'].includes(order.status));
+  const activeOrderCount = activeOrders.length;
 
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">跳到主要内容</a>
@@ -454,9 +455,9 @@ function CustomerWorkspace({ user, onLogout }: { user: UserProfile; onLogout: ()
         <h3 className="side-heading"><History size={14} />最近对话</h3>
         {conversations.length ? conversations.map(conversation => <ConversationNavItem key={conversation.id} conversation={conversation} active={conversation.id === conversationId} onSelect={loadConversation} />) : <EmptyState title="还没有对话" description="告诉小呆你今天想吃什么。" />}
       </div>
-      <div className="profile-card"><div className="profile-avatar">{user.name.slice(0, 1)}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button className="logout-icon" title="退出登录" onClick={onLogout}><LogOut size={16} /></button></div>
+      <div className="profile-card"><div className="profile-avatar">{user.name.slice(0, 1)}</div><div><strong>{user.name}</strong><span>{user.email}</span></div><button className="logout-icon" type="button" aria-label="退出登录" title="退出登录" onClick={onLogout}><LogOut size={16} /></button></div>
     </aside>
-    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} deliveryAddress={deliveryAddress} savedMeals={savedMeals} tasteProfile={tasteProfile} isSending={isSending} isOpeningBox={isOpeningBox} onOpenHistory={() => setIsHistoryOpen(true)} onOpenAddress={() => setIsAddressDialogOpen(true)} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onSaveMeal={saveRecommendation} onFeedback={sendBlindBoxFeedback} />
+    <ChatWorkspace messages={messages} requirements={requirements} restaurantCount={restaurants.length} deliveryAddress={deliveryAddress} savedMeals={savedMeals} tasteProfile={tasteProfile} activeOrders={activeOrders} isSending={isSending} isOpeningBox={isOpeningBox} onOpenHistory={() => setIsHistoryOpen(true)} onOpenAddress={() => setIsAddressDialogOpen(true)} onOpenOrders={() => openPanel('orders')} onSend={sendMessage} onBlindBox={openBlindBox} onAddToCart={addToCart} onSaveMeal={saveRecommendation} onFeedback={sendBlindBoxFeedback} />
     <button className="dining-room-fab" onClick={() => setDiningRoomOpen(true)}><UsersRound size={18} /><span>和饭搭子一起选</span></button>
     <aside className={`right-panel ${isMobilePanelOpen ? 'panel-open' : ''}`} aria-label="点餐详情">
       <button className="mobile-panel-close" aria-label="关闭详情面板" onClick={() => setIsMobilePanelOpen(false)}><X size={20} /></button>
@@ -559,8 +560,38 @@ function RecommendationOverview({ recommendations }: { recommendations: Recommen
   return <section className="decision-overview" aria-label="推荐候选速览"><header><span><Sparkles size={15} />DECISION SHORTLIST</span><div><h3>先看差异，再决定吃哪份</h3><b>{recommendations.length} 个候选</b></div><p>价格均为预计到手价，点击候选可直接查看完整理由。</p></header><div className="overview-grid">{recommendations.map((recommendation, index) => { const item = recommendation.menuItems[0]; if (!item) return null; return <button type="button" key={recommendation.restaurant.id} onClick={() => reveal(recommendation.restaurant.id)}><i>{String(index + 1).padStart(2, '0')}</i><span><strong>{item.name}</strong><small><Store size={12} />{recommendation.restaurant.name}</small></span><em>{strength(recommendation, index)}</em><b>¥{formatMoney(payable(recommendation))}</b><ArrowRight size={15} /></button>; })}</div></section>;
 }
 
-function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddress, savedMeals, tasteProfile, isSending, isOpeningBox, onOpenHistory, onOpenAddress, onSend, onBlindBox, onAddToCart, onSaveMeal, onFeedback }: {
-  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; deliveryAddress: string; savedMeals: SavedMeal[]; tasteProfile: TasteProfile | null; isSending: boolean; isOpeningBox: boolean; onOpenHistory: () => void; onOpenAddress: () => void; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
+function ActiveOrderDock({ orders, onOpen }: { orders: Order[]; onOpen: () => void }) {
+  const order = useMemo(() => [...orders].sort((left, right) => {
+    const leftNeedsAction = left.status === 'pending_payment' ? 1 : 0;
+    const rightNeedsAction = right.status === 'pending_payment' ? 1 : 0;
+    return rightNeedsAction - leftNeedsAction || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+  })[0], [orders]);
+  if (!order) return null;
+  const needsPayment = order.status === 'pending_payment';
+  const arrival = order.fulfillment.estimatedArrivalAt ? new Date(order.fulfillment.estimatedArrivalAt) : null;
+  const hasValidArrival = arrival && !Number.isNaN(arrival.getTime());
+  const progress = needsPayment ? 7 : Math.max(8, order.fulfillment.progressPercent);
+  const stateLabel = needsPayment ? '这笔订单还差一步' : order.fulfillment.currentAction || statusLabel[order.status];
+  const timingLabel = needsPayment
+    ? `待支付 ¥${formatMoney(order.total)}`
+    : hasValidArrival
+      ? `预计 ${arrival.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 送达`
+      : `预计 ${order.estimatedDeliveryTime} 分钟送达`;
+  const DockIcon = needsPayment ? CreditCard : order.status === 'delivering' || order.status === 'picked_up' ? Bike : PackageCheck;
+  return <section className={`active-order-dock ${needsPayment ? 'needs-action' : ''}`} aria-label="当前订单快捷状态" aria-live="polite">
+    <div className="order-dock-icon"><DockIcon size={19} /></div>
+    <div className="order-dock-copy">
+      <div><small><i />{needsPayment ? '需要操作' : order.fulfillment.isLive ? '实时同步' : '演示同步'}</small>{orders.length > 1 && <em>另有 {orders.length - 1} 单</em>}</div>
+      <strong>{stateLabel}</strong>
+      <span>{order.restaurantName} · {timingLabel}</span>
+    </div>
+    <button type="button" onClick={onOpen} aria-label={`${needsPayment ? '前往支付' : '查看配送详情'}：${order.restaurantName}`}>{needsPayment ? '去支付' : '看进度'}<ArrowRight size={15} /></button>
+    <div className="order-dock-progress" role="progressbar" aria-label="当前订单整体进度" aria-valuemin={0} aria-valuenow={progress} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div>
+  </section>;
+}
+
+function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddress, savedMeals, tasteProfile, activeOrders, isSending, isOpeningBox, onOpenHistory, onOpenAddress, onOpenOrders, onSend, onBlindBox, onAddToCart, onSaveMeal, onFeedback }: {
+  messages: ChatMessage[]; requirements: ExtractedRequirements; restaurantCount: number; deliveryAddress: string; savedMeals: SavedMeal[]; tasteProfile: TasteProfile | null; activeOrders: Order[]; isSending: boolean; isOpeningBox: boolean; onOpenHistory: () => void; onOpenAddress: () => void; onOpenOrders: () => void; onSend: (message: string) => void; onBlindBox: (requirements?: ExtractedRequirements) => void; onAddToCart: (recommendation: RecommendationResult, index?: number) => void; onSaveMeal: (recommendation: RecommendationResult) => Promise<void>; onFeedback: (boxId: string, action: 'liked' | 'disliked' | 'reopened' | 'platform_opened') => void;
 }) {
   const [input, setInput] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -575,6 +606,7 @@ function ChatWorkspace({ messages, requirements, restaurantCount, deliveryAddres
   return <main className="workspace" id="main-content">
     <header className="topbar"><button className="topbar-history" type="button" aria-label="打开最近对话" onClick={onOpenHistory}><Menu size={20} /></button><div className="topbar-title"><span className="topbar-kicker">TODAY'S PICK</span><h1>今天想吃点什么？</h1></div><div className="topbar-actions"><button className={`delivery-location ${deliveryAddress ? 'ready' : ''}`} type="button" aria-label={deliveryAddress ? `当前送到：${deliveryAddress}，点击修改` : '设置送达地址'} aria-haspopup="dialog" onClick={onOpenAddress}><MapPin size={17} /><span><small>{deliveryAddress ? '当前送到' : '配送位置'}</small><strong>{deliveryAddress || '设置送达地址'}</strong></span><ChevronDown size={15} /></button><div className="topbar-meta"><span className="status-dot" />{restaurantCount} 家可选门店</div></div></header>
     <section className="message-list">
+      <ActiveOrderDock orders={activeOrders} onOpen={onOpenOrders} />
       {messages.length === 0 ? <BlindBoxLaunchpad requirements={requirements} restaurantCount={restaurantCount} deliveryAddress={deliveryAddress} tasteProfile={tasteProfile} opening={isOpeningBox} onOpen={onBlindBox} onAsk={onSend} examples={examples} /> : messages.map(message => <article className={`message ${message.role}`} key={message.id}><div className="bubble">{message.content}</div>{message.recommendations?.length ? <><RecommendationOverview recommendations={message.recommendations} /><div className="recommendations">{message.recommendations.map((recommendation, index) => { const itemIds = recommendation.menuItems.map(item => item.id).sort().join('|'); const isSaved = savedMeals.some(saved => saved.restaurant?.id === recommendation.restaurant.id && [...saved.menuItemIds].sort().join('|') === itemIds); return <RecommendationCard key={`${recommendation.restaurant.id}-${recommendation.totalPrice}`} recommendation={recommendation} rank={index} isSaved={isSaved} onAdd={onAddToCart} onSave={onSaveMeal} blindBoxId={message.blindBoxId} onFeedback={onFeedback} />; })}</div></> : null}</article>)}
       {recoveryOptions.length > 0 && <section className="search-recovery" aria-label="调整搜索条件"><div><RotateCcw size={18} /><span><b>换个条件，马上再找</b><small>保留其他偏好，只调整最可能卡住结果的条件</small></span></div><div className="recovery-actions">{recoveryOptions.map(option => <button key={option.prompt} type="button" onClick={() => onSend(option.prompt)}><strong>{option.label}</strong><span>{option.detail}</span></button>)}</div></section>}
       {isSending && <div className="thinking"><span /><span /><span />小呆正在匹配商品...</div>}<div ref={endRef} />
